@@ -958,7 +958,7 @@ def main():
     # ==========================================
     
     # Option 1: Provide your own URDF path
-    ROBOT_URDF_PATH = "/home/poison-arrow/MPC_Gait/anymal_c_simple_description-master/urdf/anymal.urdf"  # <-- CHANGE THIS
+    ROBOT_URDF_PATH = "/home/poison-arrow/EECE5552/MPC_Gait/anymal_c_simple_description-master/urdf/anymal.urdf"  # <-- CHANGE THIS
     
     # Option 2: Use built-in simple quadruped (if URDF not found)
     USE_SIMPLE_ROBOT = False  # Set to False if you have a URDF

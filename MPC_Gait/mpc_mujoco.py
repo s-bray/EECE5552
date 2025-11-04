@@ -409,11 +409,11 @@ class RobotSimulation:
         <mujoco model="simple_quadruped">
             <compiler angle="radian" coordinate="local"/>
             
-            <option timestep="0.002" gravity="0 0 -9.81"/>
+            <option timestep="0.001" gravity="0 0 -9.81"/>
             
             <default>
                 <geom rgba="0.8 0.6 0.4 1" friction="1 0.005 0.0001"/>
-                <joint damping="0.5" armature="0.01"/>
+                <joint damping="5.0" armature="0.1"/>  <!-- Was damping="0.5" -->
             </default>
             
             <asset>
@@ -425,7 +425,7 @@ class RobotSimulation:
             
             <worldbody>
                 <light pos="0 0 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
-                <geom name="floor" size="5 5 .05" type="plane" material="grid"/>
+                <geom name="floor" pos="0 0 -0.1" size="5 5 .05" type="plane" material="grid"/>
                 
                 <body name="base" pos="0 0 0.5">
                     <freejoint/>
@@ -527,17 +527,28 @@ class RobotSimulation:
         """Set initial joint positions to nominal standing configuration"""
         # Standing pose: legs slightly bent
         nominal_config = [
-            0.0, 0.6, -1.2,  # FL: hip, thigh, shank
-            0.0, 0.6, -1.2,  # FR
-            0.0, 0.6, -1.2,  # HL
-            0.0, 0.6, -1.2,  # HR
+            0.0, 0.8, -1.6,  # FL: hip, thigh, shank
+            0.0, 0.8, -1.6,  # FR
+            0.0, 0.8, -1.6,  # HL
+            0.0, 0.8, -1.6,  # HR
         ]
         
         for i, joint_idx in enumerate(self.joint_indices[:12]):
             if i < len(nominal_config):
                 qpos_addr = self.model.jnt_qposadr[joint_idx]
                 self.data.qpos[qpos_addr] = nominal_config[i]
-    
+
+        # Lower base height so feet touch ground
+        self.data.qpos[2] = 0.35  # Z position
+        
+        # Forward kinematics to update everything
+        mujoco.mj_forward(self.model, self.data)
+        
+        # DEBUG: Check if feet are in contact
+        print(f"  DEBUG: Initial contacts = {self.data.ncon}")
+        if self.data.ncon == 0:
+            print("  ⚠️ WARNING: No ground contact! Legs not touching floor!")
+        
     def get_state(self) -> np.ndarray:
         """Get current robot state in SRBD format"""
         # Base position and quaternion (MuJoCo qpos quaternion ordering: w, x, y, z)
@@ -582,14 +593,70 @@ class RobotSimulation:
         return x
 
     
+    def apply_control_optimal(self, u: np.ndarray):
+            """Apply PD control to track nominal standing configuration"""
+            
+            # Nominal standing pose - legs bent to support body
+            q_nominal = np.array([
+                0.0, 0.8, -1.6,  # FL: hip, thigh, shank
+                0.0, 0.8, -1.6,  # FR
+                0.0, 0.8, -1.6,  # HL
+                0.0, 0.8, -1.6,  # HR
+            ])
+            
+            # PD gains - tune these if robot is too stiff or too loose
+            kp = 100.0   # Position gain
+            kd = 10.0    # Velocity gain (damping)
+            
+            # Apply control to each actuator
+            num_actuators = min(self.model.nu, 12)
+            
+            for act_idx in range(num_actuators):
+                # Get the joint this actuator controls
+                try:
+                    trnid = self.model.actuator_trnid[act_idx]
+                    joint_idx = int(trnid[1])
+                except:
+                    if act_idx < len(self.joint_indices):
+                        joint_idx = self.joint_indices[act_idx]
+                    else:
+                        continue
+                
+                # Get current joint state
+                qpos_addr = self.model.jnt_qposadr[joint_idx]
+                qvel_addr = self.model.jnt_dofadr[joint_idx]
+                
+                q_current = float(self.data.qpos[qpos_addr])
+                qd_current = float(self.data.qvel[qvel_addr])
+                
+                # PD control law: τ = Kp*(q_desired - q) - Kd*qd
+                if act_idx < len(q_nominal):
+                    q_desired = q_nominal[act_idx]
+                else:
+                    q_desired = 0.0
+                
+                q_error = q_desired - q_current
+                torque = kp * q_error - kd * qd_current
+                
+                # Clamp to actuator limits
+                try:
+                    ctrl_min, ctrl_max = self.model.actuator_ctrlrange[act_idx]
+                    torque = np.clip(torque, ctrl_min, ctrl_max)
+                except:
+                    torque = np.clip(torque, -150.0, 150.0)
+                
+                # Apply torque
+                self.data.ctrl[act_idx] = torque
+
+    
     def apply_control(self, u: np.ndarray):
         """Apply control inputs to robot (safer mapping + clamping)"""
         # Only use joint velocity part for now; ignore SRBD lambda_e until it's hooked into MuJoCo
         u_j = u[12:24]
 
         # Conservative PD gains to avoid violent torques
-        kp = 5.0
-        kd = 0.5
+        kp = 200.0
+        kd = 150
 
         # Build mapping from actuator index -> joint index if possible.
         # Many simple XMLs have actuator order matching joint order; still we'll be defensive.
@@ -823,6 +890,18 @@ def main():
             
             # Get current state
             x_current = sim.get_state()
+
+            # # DEBUG: Check for bad values
+            # if np.any(np.isnan(x_current)) or np.any(np.isinf(x_current)):
+            #     print("ERROR: State contains NaN or Inf!")
+            #     print(x_current)
+            #     break
+
+            # if np.linalg.norm(x_current[6:9]) > 10.0:  # angular velocity
+            #     print("ERROR: Angular velocity exploding!")
+            #     print("omega:", x_current[6:9])
+            #     break
+
             state_history.append(x_current.copy())
             
             # Generate reference trajectory
@@ -856,7 +935,8 @@ def main():
             # Apply control
             u_apply = u_optimal[0]
             control_history.append(u_apply.copy())
-            sim.apply_control(u_apply)
+            # sim.apply_control(u_apply)
+            sim.apply_control_optimal(u_apply)
             
             # Compute cost
             cost = controller.compute_cost(x_current, u_apply, 
