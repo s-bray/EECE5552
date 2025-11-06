@@ -19,7 +19,14 @@ def generate_reference_trajectory(params: MPCParameters,
     omega_ref = target_velocity[3:6]
     v_ref = target_velocity[0:3]
     q_j_nominal = current_state[12:24]
-    
+
+    # q_j_nominal = np.array([
+    #     0.0, 0.8, -1.6,  # FL
+    #     0.0, 0.8, -1.6,  # FR
+    #     0.0, 0.8, -1.6,  # HL
+    #     0.0, 0.8, -1.6   # HR
+    # ])
+
     for k in range(N):
         t = k * dt
         

@@ -246,8 +246,8 @@ class RobotSimulation:
             ])
             
             # PD gains - tune these if robot is too stiff or too loose
-            kp = 200.0   # Position gain
-            kd = 50.0    # Velocity gain (damping)
+            kp = 10   # Position gain
+            kd = 1    # Velocity gain (damping)
             
             # Apply control to each actuator
             num_actuators = min(self.model.nu, 12)
@@ -296,8 +296,8 @@ class RobotSimulation:
         u_j = u[12:24]
 
         # Conservative PD gains to avoid violent torques
-        kp = 200.0
-        kd = 150
+        kp = 100.0
+        kd = 1.0
 
         # Build mapping from actuator index -> joint index if possible.
         # Many simple XMLs have actuator order matching joint order; still we'll be defensive.
@@ -336,10 +336,22 @@ class RobotSimulation:
             self.data.ctrl[act_idx] = ctrl_clamped
 
     
-    def step(self):
-        """Step the simulation"""
+    # def step(self):
+    #     """Step the simulation"""
+    #     mujoco.mj_step(self.model, self.data)
+    #     if self.viewer is not None:
+    #         self.viewer.sync()
+
+    def step_physics(self):
+        """Step the simulation's physics by one timestep"""
         mujoco.mj_step(self.model, self.data)
+    
+    def render(self):
+        """Sync the viewer (if it exists) to match real-time"""
         if self.viewer is not None:
+            if not self.viewer.is_running():
+                # This allows user to close the window
+                raise KeyboardInterrupt
             self.viewer.sync()
     
     def close(self):

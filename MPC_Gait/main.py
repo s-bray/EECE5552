@@ -33,7 +33,7 @@ def main():
     SIMULATION_TIME = 30.0  # seconds
     
     # Target velocity [vx, vy, vz, wx, wy, wz]
-    TARGET_VELOCITY = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.5 m/s forward
+    TARGET_VELOCITY = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.5 m/s forward
     
     # ==========================================
     # SETUP
@@ -142,6 +142,21 @@ def main():
     dt_control = 1.0 / params.control_freq
     num_steps = int(SIMULATION_TIME / dt_control)
     
+    # --- NEW: Get simulation timestep ---
+    try:
+        sim_timestep = sim.model.opt.timestep
+    except Exception:
+        sim_timestep = 0.001  # Fallback
+    
+    # --- NEW: Calculate sim steps per control step ---
+    if sim_timestep <= 0:
+        sim_timestep = 0.001
+        print(f"  ⚠️ Warning: Invalid sim_timestep, defaulting to {sim_timestep}s")
+
+    num_sim_steps_per_control = int(dt_control / sim_timestep)
+    print(f"  ✓ Control @ {params.control_freq}Hz, Sim @ {1.0/sim_timestep:.0f}Hz")
+    print(f"  ✓ Running {num_sim_steps_per_control} sim steps per control step.")
+    
     # Data logging
     state_history = []
     control_history = []
@@ -189,19 +204,26 @@ def main():
             # Apply control
             u_apply = u_optimal[0]
             control_history.append(u_apply.copy())
-            # sim.apply_control(u_apply)
-            sim.apply_control_optimal(u_apply)
             
             # Compute cost
             cost = controller.compute_cost(x_current, u_apply, 
                                           x_ref_traj[0], np.zeros(24))
             cost_history.append(cost)
             
-            # Step simulation
-            sim.step()
+            # --- 5. APPLY CONTROL & STEP SIM (Inner Loop) ---
+            # This inner loop runs at the SIMULATION frequency (e.g., 1000Hz)
+            # It applies the *same* command for the whole control interval
+            for _ in range(num_sim_steps_per_control):
+                # We must re-apply the command at each physics step
+                # This is a "zero-order hold"
+                sim.apply_control_optimal(u_apply) # (Assumes simulation.py gains are 100/10)
+                sim.step_physics()         # Advance physics by 0.001s
             
-            # Print status
-            if step % int(params.control_freq) == 0:
+            # --- 6. RENDER (once per control step) ---
+            sim.render()
+            
+            # --- 7. PRINT STATUS ---
+            if step % int(params.control_freq) == 0: # Print once per second
                 pos = x_current[3:6]
                 vel = x_current[9:12]
                 contact_str = ''.join(['█' if c else '░' for c in current_contact_states])
