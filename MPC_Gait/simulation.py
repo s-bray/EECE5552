@@ -239,15 +239,15 @@ class RobotSimulation:
             
             # Nominal standing pose - legs bent to support body
             q_nominal = np.array([
-                0.0, 0.8, -1.6,  # FL: hip, thigh, shank
-                0.0, 0.8, -1.6,  # FR
-                0.0, 0.8, -1.6,  # HL
-                0.0, 0.8, -1.6,  # HR
+                0.0, 0.8, -1.29,  # FL: hip, thigh, shank
+                0.0, 0.8, -1.29,  # FR
+                0.0, 0.8, -1.29,  # HL
+                0.0, 0.8, -1.29,  # HR
             ])
             
             # PD gains - tune these if robot is too stiff or too loose
-            kp = 10   # Position gain
-            kd = 1    # Velocity gain (damping)
+            kp = 15   # Position gain # 20
+            kd = 1.57    # Velocity gain (damping) # 1.5625
             
             # Apply control to each actuator
             num_actuators = min(self.model.nu, 12)
