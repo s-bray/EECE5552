@@ -234,7 +234,7 @@ class RobotSimulation:
         return x
 
     
-    def apply_control_optimal(self, u: np.ndarray):
+    def apply_control_stand(self, u: np.ndarray):
             """Apply PD control to track nominal standing configuration"""
             
             # Nominal standing pose - legs bent to support body
@@ -291,49 +291,46 @@ class RobotSimulation:
 
     
     def apply_control(self, u: np.ndarray):
-        """Apply control inputs to robot (safer mapping + clamping)"""
-        # Only use joint velocity part for now; ignore SRBD lambda_e until it's hooked into MuJoCo
-        u_j = u[12:24]
-
-        # Conservative PD gains to avoid violent torques
-        kp = 100.0
-        kd = 1.0
-
-        # Build mapping from actuator index -> joint index if possible.
-        # Many simple XMLs have actuator order matching joint order; still we'll be defensive.
-        num_actuators = min(self.model.nu, 12)
-        for act_idx in range(num_actuators):
-            # try to get joint index for this actuator; fallback to joint_indices[act_idx]
-            try:
-                # actuator_trnid gives tuple (obj_type, obj_id)
-                trnid = self.model.actuator_trnid[act_idx]  # shape (3,) in mujoco python binding, type/id pair
-                # actuator_trnid layout can be (0, joint_id, dof_index) — we'll try second element
-                joint_obj_id = int(trnid[1])
-                joint_idx = joint_obj_id
-            except Exception:
-                joint_idx = self.joint_indices[act_idx] if act_idx < len(self.joint_indices) else None
-
-            if joint_idx is None:
-                continue
-
-            # current joint velocity address
-            qvel_addr = int(self.model.jnt_dofadr[joint_idx])
-            current_vel = float(self.data.qvel[qvel_addr])
-
-            desired_vel = float(u_j[act_idx]) if act_idx < len(u_j) else 0.0
-            vel_error = desired_vel - current_vel
-
-            # raw control value
-            ctrl_val = kp * vel_error - kd * current_vel
-
-            # clamp to actuator ctrlrange if available
-            try:
-                lo, hi = self.model.actuator_ctrlrange[act_idx]
-                ctrl_clamped = float(np.clip(ctrl_val, lo - 1e-6, hi + 1e-6))
-            except Exception:
-                ctrl_clamped = float(np.clip(ctrl_val, -100.0, 100.0))
-
-            self.data.ctrl[act_idx] = ctrl_clamped
+            """
+            Apply MPC control with PROPER PD control
+            
+            Key insight: The MPC outputs desired joint VELOCITIES, not positions!
+            We need to integrate them properly and use PD control.
+            """
+            lambda_e = u[0:12].reshape(4, 3)  # Contact forces (not used directly in position control)
+            u_j_desired = u[12:24]  # Desired joint velocities
+            kp = 5
+            kd = 1.5625
+            
+            # Get current joint states
+            q_j_current = self.data.qpos[7:7+12]  # Current joint positions
+            q_j_dot_current = self.data.qvel[6:6+12]  # Current joint velocities
+            
+            # === METHOD 1: Velocity tracking with damping ===
+            # This is more stable than position tracking for MPC
+            
+            for i, joint_idx in enumerate(self.joint_indices[:12]):
+                if i < len(u_j_desired):
+                    # Desired velocity from MPC
+                    v_desired = u_j_desired[i]
+                    
+                    # Current velocity
+                    v_current = q_j_dot_current[i] if i < len(q_j_dot_current) else 0.0
+                    
+                    # Velocity error
+                    v_error = v_desired - v_current
+                    
+                    # PD control on velocity
+                    # tau = Kp * v_error - Kd * v_current
+                    tau = kp * v_error - kd * v_current
+                    
+                    # Limit torque
+                    tau_max = 50.0  # N⋅m
+                    tau = np.clip(tau, -tau_max, tau_max)
+                    
+                    # Apply torque
+                    if i < self.data.ctrl.shape[0]:
+                        self.data.ctrl[i] = tau
 
     
     # def step(self):

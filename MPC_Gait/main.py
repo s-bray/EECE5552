@@ -33,7 +33,7 @@ def main():
     SIMULATION_TIME = 30.0  # seconds
     
     # Target velocity [vx, vy, vz, wx, wy, wz]
-    TARGET_VELOCITY = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.5 m/s forward
+    TARGET_VELOCITY = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.5 m/s forward
     
     # ==========================================
     # SETUP
@@ -216,7 +216,7 @@ def main():
             for _ in range(num_sim_steps_per_control):
                 # We must re-apply the command at each physics step
                 # This is a "zero-order hold"
-                sim.apply_control_optimal(u_apply) # (Assumes simulation.py gains are 100/10)
+                sim.apply_control(u_apply) # (Assumes simulation.py gains are 100/10)
                 sim.step_physics()         # Advance physics by 0.001s
             
             # --- 6. RENDER (once per control step) ---
