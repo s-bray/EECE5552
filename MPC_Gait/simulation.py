@@ -11,10 +11,11 @@ from config import MPCParameters
 class RobotSimulation:
     """MuJoCo simulation environment for the wheeled-legged robot"""
     
-    def __init__(self, xml_path: str, params: MPCParameters, use_gui: bool = True):
+    def __init__(self, xml_path: str, params: MPCParameters, verify=False, use_gui: bool = True):
         self.params = params
         self.xml_path = xml_path
         self.use_gui = use_gui
+        self.verify = verify
         
         # Load model
         if os.path.exists(xml_path):
@@ -192,7 +193,7 @@ class RobotSimulation:
         
     def get_state(self) -> np.ndarray:
         """Get current robot state in SRBD format"""
-        # Base position and quaternion (MuJoCo qpos quaternion ordering: w, x, y, z)
+        # Base position and quaternion
         base_pos = self.data.qpos[0:3].copy()
         base_quat_mj = self.data.qpos[3:7].copy()  # [w, x, y, z]
 
@@ -201,27 +202,26 @@ class RobotSimulation:
         r = Rotation.from_quat(quat_scipy)
         base_orn_euler = r.as_euler('xyz', degrees=False)
 
-        # Base velocities -- note: MuJoCo qvel ordering for a freejoint is linear then angular often in world frame.
-        # We'll extract world linear/ang vel from qvel (MuJoCo: qvel[0:3]=linear, qvel[3:6]=angular)
+        # Base velocities
         base_vel_linear_world = self.data.qvel[0:3].copy()
         base_vel_angular_world = self.data.qvel[3:6].copy()
 
         # Convert velocities to body frame
         R_WB = r.as_matrix()
         R_BW = R_WB.T
-
         v_body = R_BW @ base_vel_linear_world
         omega_body = R_BW @ base_vel_angular_world
 
-        # Joint positions (skip free joint, get actuated joints)
+        # Joint positions - USE PROPER MAPPING!
         joint_positions = []
-        for joint_idx in self.joint_indices[:12]:
+        for joint_idx in self.joint_indices[:12]:  # ✓ Correct
             qpos_addr = self.model.jnt_qposadr[joint_idx]
             joint_positions.append(self.data.qpos[qpos_addr])
 
+        # Pad if necessary
         while len(joint_positions) < 12:
             joint_positions.append(0.0)
-        joint_positions = joint_positions[:12]
+        joint_positions = np.array(joint_positions[:12])
 
         x = np.concatenate([
             base_orn_euler,      # theta (3)
@@ -233,111 +233,240 @@ class RobotSimulation:
 
         return x
 
-    
-    def apply_control_stand(self, u: np.ndarray):
-            """Apply PD control to track nominal standing configuration"""
-            
-            # Nominal standing pose - legs bent to support body
-            q_nominal = np.array([
-                0.0, 0.8, -1.29,  # FL: hip, thigh, shank
-                0.0, 0.8, -1.29,  # FR
-                0.0, 0.8, -1.29,  # HL
-                0.0, 0.8, -1.29,  # HR
-            ])
-            
-            # PD gains - tune these if robot is too stiff or too loose
-            kp = 15   # Position gain # 20
-            kd = 1.57    # Velocity gain (damping) # 1.5625
-            
-            # Apply control to each actuator
-            num_actuators = min(self.model.nu, 12)
-            
-            for act_idx in range(num_actuators):
-                # Get the joint this actuator controls
+    def simple_actuator_step(self, act_idx=0, torque_cmd=1.0, steps=50):
+        print("=== ACTUATORS (index -> joint) ===")
+        for i in range(self.model.nu):
+            name = self.model.actuator(i).name or "<unnamed actuator>"
+            joint_id = int(self.model.actuator_trnid[i][0])
+            jname = self.model.joint(joint_id).name or "<no joint>"
+            print(f"  actuator {i:2d}  {name:20s} -> joint {joint_id:2d} ({jname})")
+
+    def debug_mujoco_mapping(self):
+        print("\n=== MODEL / ACTUATOR MAPPING ===")
+        print(f"model.nu (actuators) = {self.model.nu}")
+        print(f"model.nv (dofs)      = {self.model.nv}")
+
+        print("\n=== JOINTS (index / qposadr / dofadr) ===")
+        for i in range(self.model.njnt):
+            name = self.model.joint(i).name or "<unnamed joint>"
+            qposadr = int(self.model.jnt_qposadr[i])
+            dofadr  = int(self.model.jnt_dofadr[i])
+            print(f"  joint {i:2d}  name={name:20s}  qposadr={qposadr:3d}  dofadr={dofadr:3d}")
+
+        print("\n=== ACTUATORS (index -> joint) ===")
+        for i in range(self.model.nu):
+            name = self.model.actuator(i).name or "<unnamed actuator>"
+            joint_id = int(self.model.actuator_trnid[i][0])
+            jname = self.model.joint(joint_id).name or "<no joint>"
+            print(f"  actuator {i:2d}  name={name:20s} -> joint {joint_id:2d} ({jname})")
+
+        print("\n=== CURRENT STATE SAMPLE ===")
+        print("qpos[:20] =", np.round(self.data.qpos[:20], 4))
+        print("qvel[:20] =", np.round(self.data.qvel[:20], 4))
+
+
+    def compute_leg_jacobian(self, body_name: str):
+        """
+        Return the translational Jacobian (3 x nv) of the requested body (e.g. 'fl_shank').
+        Uses mujoco.mj_jac if available. If not available or fails, returns zeros.
+        """
+        try:
+            # get body id
+            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            nv = self.model.nv
+            # allocate arrays for jacobians (MuJoCo expects C-contiguous arrays)
+            jacp = np.zeros((3, nv), dtype=np.float64)
+            jacr = np.zeros((3, nv), dtype=np.float64)
+            # compute jacobian at current state
+            mujoco.mj_jac(self.model, self.data, jacp, jacr, body_id)
+            # jacp is translation jacobian in world (or model) frame for that body
+            return jacp  # shape (3, nv)
+        except Exception:
+            # safe fallback: return zeros so J^T f contributes nothing
+            return np.zeros((3, self.model.nv), dtype=np.float64)
+
+    def apply_control(self, u: np.ndarray):
+        """
+        Safer PD velocity servo with diagnostics and gravity compensation.
+        u layout:
+        - u[0:12]   -> lambda_e (ignored for now at low-level)
+        - u[12:24]  -> desired joint velocities (len 12)
+        """
+
+        # ============= VERIFICATION MODE: print mappings and test actuator =============
+        if getattr(self, "verify", False):
+            if not hasattr(self, "_verified_once"):
+                self.debug_mujoco_mapping()
+                print("\n=== ACTUATOR PROPERTIES (ctrlrange, gear) ===")
+                for a in range(self.model.nu):
+                    try:
+                        ctrlrange = self.model.actuator_ctrlrange[a]
+                    except Exception:
+                        ctrlrange = ("N/A", "N/A")
+                    try:
+                        gear = float(self.model.actuator_gainprm[a][0])  # occasionally used
+                    except Exception:
+                        # fallback: read gear from XML motor attribute if present
+                        gear = getattr(self.model.actuator, "gear", None)
+                    print(f"  act {a:2d}  ctrlrange={ctrlrange}  gear={gear}")
+                print("\n[DEBUG] Single-actuator poke (actuator 0): small positive, then negative.")
+                # small poke to see sign and response
+                self.simple_actuator_step(act_idx=0, torque_cmd=0.1, steps=50)
+                self.simple_actuator_step(act_idx=0, torque_cmd=-0.1, steps=50)
+                self._verified_once = True
+
+            # freeze robot while verifying
+            self.data.ctrl[:] = 0.0
+            return
+
+        # ============= UNPACK & SAFETY DEFAULTS =============
+        # Desired velocities
+        u_j_desired = np.asarray(u[12:24]).flatten()
+        dt = float(self.model.opt.timestep)
+
+        kp = 50
+        kd = 1.5
+        tau_hard_limit = 33.5
+
+        # READ CURRENT JOINT STATES PROPERLY
+        q_j_current = []
+        q_j_dot_current = []
+        
+        for joint_idx in self.joint_indices[:12]:
+            qpos_addr = int(self.model.jnt_qposadr[joint_idx])
+            dof_addr = int(self.model.jnt_dofadr[joint_idx])
+            q_j_current.append(float(self.data.qpos[qpos_addr]))
+            q_j_dot_current.append(float(self.data.qvel[dof_addr]))
+        
+        q_j_current = np.array(q_j_current)
+        q_j_dot_current = np.array(q_j_dot_current)
+
+        # Compute desired joint positions by simple Euler integration
+        q_j_desired = q_j_current + u_j_desired * dt
+
+        # Gravity / bias compensation (MuJoCo provides qfrc_bias in generalized coordinates)
+        mujoco.mj_forward(self.model, self.data)
+        try:
+            qfrc_bias = np.asarray(self.data.qfrc_bias)  # length nv
+        except Exception:
+            qfrc_bias = np.zeros(self.model.nv, dtype=np.float64)
+
+        # Build per-actuator torque command safely
+        # Ensure mapping cache exists
+        if not hasattr(self, "_joint_to_actuator"):
+            jtact = {}
+            for act_idx in range(self.model.nu):
                 try:
                     trnid = self.model.actuator_trnid[act_idx]
-                    joint_idx = int(trnid[1])
-                except:
-                    if act_idx < len(self.joint_indices):
-                        joint_idx = self.joint_indices[act_idx]
-                    else:
-                        continue
-                
-                # Get current joint state
-                qpos_addr = self.model.jnt_qposadr[joint_idx]
-                qvel_addr = self.model.jnt_dofadr[joint_idx]
-                
-                q_current = float(self.data.qpos[qpos_addr])
-                qd_current = float(self.data.qvel[qvel_addr])
-                
-                # PD control law: τ = Kp*(q_desired - q) - Kd*qd
-                if act_idx < len(q_nominal):
-                    q_desired = q_nominal[act_idx]
-                else:
-                    q_desired = 0.0
-                
-                q_error = q_desired - q_current
-                torque = kp * q_error - kd * qd_current
-                
-                # Clamp to actuator limits
+                    joint_id = int(trnid[1])
+                    jtact[joint_id] = act_idx
+                except Exception:
+                    pass
+            self._joint_to_actuator = jtact
+
+        # Track max torque we try to apply (for safety/autotune)
+        max_requested = 0.0
+
+        for i, joint_id in enumerate(self.joint_indices[:12]):
+            # state
+            q = float(q_j_current[i])
+            qd = float(q_j_dot_current[i])
+            q_des = float(q_j_desired[i])
+            qd_des = float(u_j_desired[i])
+
+            # PD law: small position term + damping on velocity error
+            tau_pd = kp * (q_des - q) + kd * (qd_des - qd)
+
+            # add gravity compensation for this DOF if available
+            dof_addr = int(self.model.jnt_dofadr[joint_id])
+            tau_bias = float(qfrc_bias[dof_addr]) if 0 <= dof_addr < self.model.nv else 0.0
+
+            tau_total = tau_pd + tau_bias
+
+            # mapping joint -> actuator index
+            act_idx = self._joint_to_actuator.get(joint_id, None)
+            if act_idx is None:
+                # fallback assume actuator i controls joint i
+                act_idx = i if i < self.data.ctrl.shape[0] else None
+
+            if act_idx is None:
+                continue
+
+            # Clamp using actuator ctrlrange if available, fallback to tau_hard_limit
+            try:
+                ctrl_min, ctrl_max = self.model.actuator_ctrlrange[act_idx]
+                tau_clamped = np.clip(tau_total, ctrl_min, ctrl_max)
+            except Exception:
+                tau_clamped = np.clip(tau_total, -tau_hard_limit, tau_hard_limit)
+
+            self.data.ctrl[act_idx] = float(tau_clamped)
+            max_requested = max(max_requested, abs(tau_clamped))
+
+        # # Safety autoscale if we keep requesting insane torque
+        # if max_requested > tau_hard_limit * 0.95:
+        #     # scale down gains if we saturate actuators
+        #     print(f"[WARNING] Requested torque ~{max_requested:.1f}Nm near limit; scaling gains down.")
+        #     # scale factor and apply to next call via stored params
+        #     if not hasattr(self, "_autoscale_factor"):
+        #         self._autoscale_factor = 0.5
+        #     else:
+        #         self._autoscale_factor = max(0.25, self._autoscale_factor * 0.7)
+        #     # reduce kp/kd for subsequent steps (affects next calls)
+        #     # store them for observation (we don't mutate kp in this call; next loop will pick the reduced values if you implement it)
+        #     print(f"[INFO] Suggested autoscale factor now {self._autoscale_factor:.3f}")
+
+    def apply_control_old(self, u: np.ndarray):
+        # unpack
+        lambda_e = np.array(u[0:12]).reshape(4,3)
+        u_j_desired = np.array(u[12:24]).flatten()
+        dt = float(self.model.opt.timestep)
+
+        # conservative gains — start small
+        kp_pos = 50.0      # position gain (start smaller if robot too twitchy)
+        kd_vel = 2.0       # velocity gain (damping)
+
+        # read joint states with verified addresses
+        q_current = np.zeros(12)
+        qd_current = np.zeros(12)
+        joint_ids = self.joint_indices[:12]
+        for i, jid in enumerate(joint_ids):
+            qposadr = int(self.model.jnt_qposadr[jid])
+            dofadr = int(self.model.jnt_dofadr[jid])
+            q_current[i] = float(self.data.qpos[qposadr])
+            qd_current[i] = float(self.data.qvel[dofadr])
+
+        # integrate to get desired joint positions
+        q_des = q_current + u_j_desired * dt
+
+        # Estimate gravity/bias torques (MuJoCo's qfrc_bias)
+        # Make sure data is up to date
+        mujoco.mj_forward(self.model, self.data)
+        try:
+            qfrc_bias = np.array(self.data.qfrc_bias)  # size nv
+        except Exception:
+            qfrc_bias = np.zeros(self.model.nv)
+
+        # Build torque per actuator/joint
+        tau_hard_limit = 200.0
+        for i, jid in enumerate(joint_ids):
+            dofadr = int(self.model.jnt_dofadr[jid])
+            bias = float(qfrc_bias[dofadr]) if 0 <= dofadr < self.model.nv else 0.0
+
+            # PD on position + gravity feedforward
+            tau_pd = kp_pos * (q_des[i] - q_current[i]) + kd_vel * (u_j_desired[i] - qd_current[i])
+            tau = tau_pd + bias
+
+            # clamp to actuator ctrlrange if available, else hard clip
+            # map joint -> actuator index
+            act_idx = self._joint_to_actuator.get(jid, i if i < self.data.ctrl.shape[0] else None)
+            if act_idx is not None and 0 <= act_idx < self.data.ctrl.shape[0]:
                 try:
                     ctrl_min, ctrl_max = self.model.actuator_ctrlrange[act_idx]
-                    torque = np.clip(torque, ctrl_min, ctrl_max)
-                except:
-                    torque = np.clip(torque, -150.0, 150.0)
-                
-                # Apply torque
-                self.data.ctrl[act_idx] = torque
+                    tau = np.clip(tau, ctrl_min, ctrl_max)
+                except Exception:
+                    tau = np.clip(tau, -tau_hard_limit, tau_hard_limit)
+                self.data.ctrl[act_idx] = float(tau)
 
-    
-    def apply_control(self, u: np.ndarray):
-            """
-            Apply MPC control with PROPER PD control
-            
-            Key insight: The MPC outputs desired joint VELOCITIES, not positions!
-            We need to integrate them properly and use PD control.
-            """
-            lambda_e = u[0:12].reshape(4, 3)  # Contact forces (not used directly in position control)
-            u_j_desired = u[12:24]  # Desired joint velocities
-            kp = 5
-            kd = 1.5625
-            
-            # Get current joint states
-            q_j_current = self.data.qpos[7:7+12]  # Current joint positions
-            q_j_dot_current = self.data.qvel[6:6+12]  # Current joint velocities
-            
-            # === METHOD 1: Velocity tracking with damping ===
-            # This is more stable than position tracking for MPC
-            
-            for i, joint_idx in enumerate(self.joint_indices[:12]):
-                if i < len(u_j_desired):
-                    # Desired velocity from MPC
-                    v_desired = u_j_desired[i]
-                    
-                    # Current velocity
-                    v_current = q_j_dot_current[i] if i < len(q_j_dot_current) else 0.0
-                    
-                    # Velocity error
-                    v_error = v_desired - v_current
-                    
-                    # PD control on velocity
-                    # tau = Kp * v_error - Kd * v_current
-                    tau = kp * v_error - kd * v_current
-                    
-                    # Limit torque
-                    tau_max = 50.0  # N⋅m
-                    tau = np.clip(tau, -tau_max, tau_max)
-                    
-                    # Apply torque
-                    if i < self.data.ctrl.shape[0]:
-                        self.data.ctrl[i] = tau
-
-    
-    # def step(self):
-    #     """Step the simulation"""
-    #     mujoco.mj_step(self.model, self.data)
-    #     if self.viewer is not None:
-    #         self.viewer.sync()
 
     def step_physics(self):
         """Step the simulation's physics by one timestep"""

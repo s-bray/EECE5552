@@ -31,6 +31,7 @@ def main():
     # Simulation parameters
     USE_GUI = True
     SIMULATION_TIME = 30.0  # seconds
+    IN_VERIFICATION = False   # <-- set False when running normally
     
     # Target velocity [vx, vy, vz, wx, wy, wz]
     TARGET_VELOCITY = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.5 m/s forward
@@ -97,7 +98,7 @@ def main():
         print(f"  ℹ Loading XML from: {ROBOT_XML_PATH}")
     
     try:
-        sim = RobotSimulation(ROBOT_XML_PATH, params, use_gui=USE_GUI)
+        sim = RobotSimulation(ROBOT_XML_PATH, params, use_gui=USE_GUI, verify=IN_VERIFICATION)
         print(f"  ✓ Robot loaded successfully")
         print(f"  ✓ Number of joints: {len(sim.joint_indices)}")
     except Exception as e:
@@ -181,6 +182,7 @@ def main():
             # Update gait sequence
             if step % 50 == 0:
                 utilities = np.random.rand(4) * 0.5 + 0.5
+                controller.gait_gen.set_gait_mode('hybrid_walk')
                 controller.gait_gen.update_gait(utilities, dt_control * 50)
                 current_contact_states = controller.gait_gen.contact_states.copy()
                 print("qpos (base+quat):", sim.data.qpos[0:7])
