@@ -402,70 +402,18 @@ class RobotSimulation:
             self.data.ctrl[act_idx] = float(tau_clamped)
             max_requested = max(max_requested, abs(tau_clamped))
 
-        # # Safety autoscale if we keep requesting insane torque
-        # if max_requested > tau_hard_limit * 0.95:
-        #     # scale down gains if we saturate actuators
-        #     print(f"[WARNING] Requested torque ~{max_requested:.1f}Nm near limit; scaling gains down.")
-        #     # scale factor and apply to next call via stored params
-        #     if not hasattr(self, "_autoscale_factor"):
-        #         self._autoscale_factor = 0.5
-        #     else:
-        #         self._autoscale_factor = max(0.25, self._autoscale_factor * 0.7)
-        #     # reduce kp/kd for subsequent steps (affects next calls)
-        #     # store them for observation (we don't mutate kp in this call; next loop will pick the reduced values if you implement it)
-        #     print(f"[INFO] Suggested autoscale factor now {self._autoscale_factor:.3f}")
-
-    def apply_control_old(self, u: np.ndarray):
-        # unpack
-        lambda_e = np.array(u[0:12]).reshape(4,3)
-        u_j_desired = np.array(u[12:24]).flatten()
-        dt = float(self.model.opt.timestep)
-
-        # conservative gains — start small
-        kp_pos = 50.0      # position gain (start smaller if robot too twitchy)
-        kd_vel = 2.0       # velocity gain (damping)
-
-        # read joint states with verified addresses
-        q_current = np.zeros(12)
-        qd_current = np.zeros(12)
-        joint_ids = self.joint_indices[:12]
-        for i, jid in enumerate(joint_ids):
-            qposadr = int(self.model.jnt_qposadr[jid])
-            dofadr = int(self.model.jnt_dofadr[jid])
-            q_current[i] = float(self.data.qpos[qposadr])
-            qd_current[i] = float(self.data.qvel[dofadr])
-
-        # integrate to get desired joint positions
-        q_des = q_current + u_j_desired * dt
-
-        # Estimate gravity/bias torques (MuJoCo's qfrc_bias)
-        # Make sure data is up to date
-        mujoco.mj_forward(self.model, self.data)
-        try:
-            qfrc_bias = np.array(self.data.qfrc_bias)  # size nv
-        except Exception:
-            qfrc_bias = np.zeros(self.model.nv)
-
-        # Build torque per actuator/joint
-        tau_hard_limit = 200.0
-        for i, jid in enumerate(joint_ids):
-            dofadr = int(self.model.jnt_dofadr[jid])
-            bias = float(qfrc_bias[dofadr]) if 0 <= dofadr < self.model.nv else 0.0
-
-            # PD on position + gravity feedforward
-            tau_pd = kp_pos * (q_des[i] - q_current[i]) + kd_vel * (u_j_desired[i] - qd_current[i])
-            tau = tau_pd + bias
-
-            # clamp to actuator ctrlrange if available, else hard clip
-            # map joint -> actuator index
-            act_idx = self._joint_to_actuator.get(jid, i if i < self.data.ctrl.shape[0] else None)
-            if act_idx is not None and 0 <= act_idx < self.data.ctrl.shape[0]:
-                try:
-                    ctrl_min, ctrl_max = self.model.actuator_ctrlrange[act_idx]
-                    tau = np.clip(tau, ctrl_min, ctrl_max)
-                except Exception:
-                    tau = np.clip(tau, -tau_hard_limit, tau_hard_limit)
-                self.data.ctrl[act_idx] = float(tau)
+        # Safety autoscale if we keep requesting insane torque
+        if max_requested > tau_hard_limit * 0.95:
+            # scale down gains if we saturate actuators
+            print(f"[WARNING] Requested torque ~{max_requested:.1f}Nm near limit; scaling gains down.")
+            # scale factor and apply to next call via stored params
+            if not hasattr(self, "_autoscale_factor"):
+                self._autoscale_factor = 0.5
+            else:
+                self._autoscale_factor = max(0.25, self._autoscale_factor * 0.7)
+            # reduce kp/kd for subsequent steps (affects next calls)
+            # store them for observation (we don't mutate kp in this call; next loop will pick the reduced values if you implement it)
+            print(f"[INFO] Suggested autoscale factor now {self._autoscale_factor:.3f}")
 
 
     def step_physics(self):
