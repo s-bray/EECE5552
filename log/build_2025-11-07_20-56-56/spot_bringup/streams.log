@@ -1,0 +1,15 @@
+[0.899s] Invoking command in '/home/poojit/spot_ws/build/spot_bringup': GZ_SIM_PLUGIN_PATH=/home/poojit/spot_ws/install/spot_gz/lib/spot_gz GZ_SIM_RESOURCE_PATH=/home/poojit/spot_ws/install/spot_description/share/spot_description/models:${GZ_SIM_RESOURCE_PATH} PYTHONPATH=/home/poojit/spot_ws/build/spot_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/poojit/spot_ws/install/spot_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/poojit/spot_ws/build/spot_bringup/build --no-deps symlink_data
+[1.159s] running develop
+[1.334s] running egg_info
+[1.351s] writing spot_bringup.egg-info/PKG-INFO
+[1.351s] writing dependency_links to spot_bringup.egg-info/dependency_links.txt
+[1.352s] writing requirements to spot_bringup.egg-info/requires.txt
+[1.352s] writing top-level names to spot_bringup.egg-info/top_level.txt
+[1.369s] reading manifest file 'spot_bringup.egg-info/SOURCES.txt'
+[1.370s] writing manifest file 'spot_bringup.egg-info/SOURCES.txt'
+[1.388s] running build_ext
+[1.406s] Creating /home/poojit/spot_ws/install/spot_bringup/lib/python3.12/site-packages/spot-bringup.egg-link (link to .)
+[1.406s] 
+[1.406s] Installed /home/poojit/spot_ws/build/spot_bringup
+[1.406s] running symlink_data
+[1.427s] Invoked command in '/home/poojit/spot_ws/build/spot_bringup' returned '0': GZ_SIM_PLUGIN_PATH=/home/poojit/spot_ws/install/spot_gz/lib/spot_gz GZ_SIM_RESOURCE_PATH=/home/poojit/spot_ws/install/spot_description/share/spot_description/models:${GZ_SIM_RESOURCE_PATH} PYTHONPATH=/home/poojit/spot_ws/build/spot_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/poojit/spot_ws/install/spot_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/poojit/spot_ws/build/spot_bringup/build --no-deps symlink_data

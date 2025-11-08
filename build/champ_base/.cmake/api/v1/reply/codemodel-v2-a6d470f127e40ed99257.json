@@ -1,0 +1,124 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-e885cc375056378dcc5d.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.15"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7
+					]
+				}
+			],
+			"name" : "",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "champ_base",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "champ_base_uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-champ_base_uninstall-c5a4a70af11c58ece744.json",
+					"name" : "champ_base_uninstall",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "message_relay::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-message_relay-ea1a0ef52164a737ae0a.json",
+					"name" : "message_relay",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "message_relay_node::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-message_relay_node-4bd6c8a9b1655ffb82c5.json",
+					"name" : "message_relay_node",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "quadruped_controller::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-quadruped_controller-c63577b8dbd68333d3d5.json",
+					"name" : "quadruped_controller",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "quadruped_controller_node::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-quadruped_controller_node-e915b702afe0cfdfdf0f.json",
+					"name" : "quadruped_controller_node",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "state_estimation::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-state_estimation-d61a975c37f77b8fbded.json",
+					"name" : "state_estimation",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "state_estimation_node::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-state_estimation_node-4785ab6ddf4b480328bb.json",
+					"name" : "state_estimation_node",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uninstall-93d2dd2f9b0e7d230043.json",
+					"name" : "uninstall",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/poojit/spot_ws/build/champ_base",
+		"source" : "/home/poojit/spot_ws/src/spot_gazebo/champ_base"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 6
+	}
+}

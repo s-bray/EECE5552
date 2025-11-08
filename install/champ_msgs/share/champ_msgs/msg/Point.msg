@@ -1,0 +1,1 @@
+/home/poojit/spot_ws/src/spot_gazebo/champ_msgs/msg/Point.msg

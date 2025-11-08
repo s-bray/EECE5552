@@ -1,0 +1,38 @@
+-- The C compiler identification is GNU 13.3.0
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ament_cmake: 2.5.4 (/opt/ros/jazzy/share/ament_cmake/cmake)
+-- Found Python3: /usr/bin/python3 (found version "3.12.3") found components: Interpreter 
+-- Override CMake install command with custom implementation using symlinks instead of copying resources
+-- Configuring done (0.5s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/poojit/spot_ws/build/champ_config
+-- Install configuration: ""
+-- Execute custom install script
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/config/gait/gait.yaml
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/config/joints/joints.yaml
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/config/links/links.yaml
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/ament_index/resource_index/package_run_dependencies/champ_config
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/ament_index/resource_index/parent_prefix_path/champ_config
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/environment/ament_prefix_path.sh
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/environment/ament_prefix_path.dsv
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/environment/path.sh
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/environment/path.dsv
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/local_setup.bash
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/local_setup.sh
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/local_setup.zsh
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/local_setup.dsv
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/package.dsv
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/ament_index/resource_index/packages/champ_config
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/cmake/champ_configConfig.cmake
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/cmake/champ_configConfig-version.cmake
+-- Symlinking: /home/poojit/spot_ws/install/champ_config/share/champ_config/package.xml

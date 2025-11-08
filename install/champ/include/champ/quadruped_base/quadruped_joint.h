@@ -1,0 +1,1 @@
+/home/poojit/spot_ws/src/spot_gazebo/champ/include/champ/quadruped_base/quadruped_joint.h

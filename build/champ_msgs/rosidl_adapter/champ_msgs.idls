@@ -1,0 +1,9 @@
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/Velocities.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/PID.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/Imu.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/Point.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/PointArray.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/Joints.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/Contacts.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/ContactsStamped.idl
+/home/poojit/spot_ws/build/champ_msgs/rosidl_adapter/champ_msgs:msg/Pose.idl
