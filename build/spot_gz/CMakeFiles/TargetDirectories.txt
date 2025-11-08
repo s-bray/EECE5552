@@ -1,9 +1,0 @@
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/uninstall.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/spot_gz_uninstall.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/test.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/edit_cache.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/rebuild_cache.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/list_install_components.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/install.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/install/local.dir
-/home/poojit/spot_ws/build/spot_gz/CMakeFiles/install/strip.dir

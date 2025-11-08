@@ -1,1 +1,0 @@
-/home/poojit/spot_ws/src/spot_gazebo/spot_bringup/setup.py

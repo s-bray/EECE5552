@@ -1,1 +1,0 @@
-/home/poojit/spot_ws/build/spot_description/ament_cmake_core/spot_descriptionConfig-version.cmake

@@ -1,2 +1,0 @@
-ament_prepend_unique_value GZ_SIM_RESOURCE_PATH "$AMENT_CURRENT_PREFIX/share/spot_gz/worlds"
-ament_prepend_unique_value GZ_SIM_PLUGIN_PATH "$AMENT_CURRENT_PREFIX/lib/spot_gz"

@@ -1,1 +1,0 @@
-/home/poojit/spot_ws/build/spot_gz/ament_cmake_environment_hooks/local_setup.bash

@@ -1,4 +1,0 @@
-source;share/spot_gz/environment/ament_prefix_path.sh
-source;share/spot_gz/environment/path.sh
-source;share/spot_gz/environment/spot_gz.sh
-source;share/spot_gz/environment/spot_gz.dsv
