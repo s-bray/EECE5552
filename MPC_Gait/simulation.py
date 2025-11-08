@@ -5,17 +5,19 @@ import mujoco
 import mujoco.viewer
 import os
 from scipy.spatial.transform import Rotation
+from create_simple_quadruped import create_simple_quadruped_xml, create_simple_quadruped_xml_wheels
 
 from config import MPCParameters
 
 class RobotSimulation:
     """MuJoCo simulation environment for the wheeled-legged robot"""
     
-    def __init__(self, xml_path: str, params: MPCParameters, verify=False, use_gui: bool = True):
+    def __init__(self, xml_path: str, params: MPCParameters, verify=False, use_gui: bool = True, wheels=False):
         self.params = params
         self.xml_path = xml_path
         self.use_gui = use_gui
         self.verify = verify
+        self.wheels = wheels
         
         # Load model
         if os.path.exists(xml_path):
@@ -23,7 +25,10 @@ class RobotSimulation:
         else:
             print(f"XML file not found: {xml_path}")
             print("Creating simple quadruped model...")
-            xml_content = self.create_simple_quadruped_xml()
+            if self.wheels:
+                xml_content = create_simple_quadruped_xml_wheels()
+            else:
+                xml_content = create_simple_quadruped_xml()
             self.model = mujoco.MjModel.from_xml_string(xml_content)
         
         self.data = mujoco.MjData(self.model)
@@ -50,121 +55,6 @@ class RobotSimulation:
         self.set_initial_configuration()
         mujoco.mj_forward(self.model, self.data)
     
-    def create_simple_quadruped_xml(self) -> str:
-        """Create a simple quadruped robot XML"""
-        xml = """
-        <mujoco model="simple_quadruped">
-            <compiler angle="radian" coordinate="local"/>
-            
-            <option timestep="0.001" gravity="0 0 -9.81"/>
-            
-            <default>
-                <geom rgba="0.8 0.6 0.4 1" friction="1 0.005 0.0001"/>
-                <joint damping="5.0" armature="0.1"/>  </default>
-            
-            <asset>
-                <texture name="grid" type="2d" builtin="checker" width="512" height="512"
-                         rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
-                <material name="grid" texture="grid" texrepeat="1 1" texuniform="true"
-                          reflectance=".2"/>
-            </asset>
-            
-            <worldbody>
-                <light pos="0 0 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
-                <geom name="floor" pos="0 0 -0.1" size="5 5 .05" type="plane" material="grid"/>
-                
-                <body name="base" pos="0 0 0.5">
-                    <freejoint/>
-                    <geom name="torso" type="box" size="0.3 0.15 0.08" mass="18.0" rgba="0.2 0.2 0.8 1"/>
-                    <geom name="torso_imu" type="sphere" size="0.02" pos="0 0 0" mass="0.1" rgba="1 0 0 1"/>
-                    
-                    <body name="fl_hip" pos="0.27 0.17 -0.08">
-                        <joint name="fl_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
-                        <geom type="capsule" fromto="0 0 0 0 0.05 0" size="0.03" mass="1.0" rgba="0.8 0.2 0.2 1"/>
-                        
-                        <body name="fl_thigh" pos="0 0.05 0">
-                            <joint name="fl_thigh_joint" type="hinge" axis="0 1 0" range="-1.57 1.57" damping="1.0"/>
-                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.025" mass="1.5" rgba="0.2 0.8 0.2 1"/>
-                            
-                            <body name="fl_shank" pos="0 0 -0.22">
-                                <joint name="fl_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
-                                <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
-                                <geom name="fl_foot" type="sphere" pos="0 0 -0.22" size="0.03" rgba="0.1 0.1 0.1 1"/>
-                            </body>
-                        </body>
-                    </body>
-                    
-                    <body name="fr_hip" pos="0.27 -0.17 -0.08">
-                        <joint name="fr_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
-                        <geom type="capsule" fromto="0 0 0 0 -0.05 0" size="0.03" mass="1.0" rgba="0.8 0.2 0.2 1"/>
-                        
-                        <body name="fr_thigh" pos="0 -0.05 0">
-                            <joint name="fr_thigh_joint" type="hinge" axis="0 1 0" range="-1.57 1.57" damping="1.0"/>
-                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.025" mass="1.5" rgba="0.2 0.8 0.2 1"/>
-                            
-                            <body name="fr_shank" pos="0 0 -0.22">
-                                <joint name="fr_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
-                                <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
-                                <geom name="fr_foot" type="sphere" pos="0 0 -0.22" size="0.03" rgba="0.1 0.1 0.1 1"/>
-                            </body>
-                        </body>
-                    </body>
-                    
-                    <body name="hl_hip" pos="-0.27 0.17 -0.08">
-                        <joint name="hl_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
-                        <geom type="capsule" fromto="0 0 0 0 0.05 0" size="0.03" mass="1.0" rgba="0.8 0.2 0.2 1"/>
-                        
-                        <body name="hl_thigh" pos="0 0.05 0">
-                            <joint name="hl_thigh_joint" type="hinge" axis="0 1 0" range="-1.57 1.57" damping="1.0"/>
-                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.025" mass="1.5" rgba="0.2 0.8 0.2 1"/>
-                            
-                            <body name="hl_shank" pos="0 0 -0.22">
-                                <joint name="hl_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
-                                <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
-                                <geom name="hl_foot" type="sphere" pos="0 0 -0.22" size="0.03" rgba="0.1 0.1 0.1 1"/>
-                            </body>
-                        </body>
-                    </body>
-                    
-                    <body name="hr_hip" pos="-0.27 -0.17 -0.08">
-                        <joint name="hr_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
-                        <geom type="capsule" fromto="0 0 0 0 -0.05 0" size="0.03" mass="1.0" rgba="0.8 0.2 0.2 1"/>
-                        
-                        <body name="hr_thigh" pos="0 -0.05 0">
-                            <joint name="hr_thigh_joint" type="hinge" axis="0 1 0" range="-1.57 1.57" damping="1.0"/>
-                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.025" mass="1.5" rgba="0.2 0.8 0.2 1"/>
-                            
-                            <body name="hr_shank" pos="0 0 -0.22">
-                                <joint name="hr_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
-                                <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
-                                <geom name="hr_foot" type="sphere" pos="0 0 -0.22" size="0.03" rgba="0.1 0.1 0.1 1"/>
-                            </body>
-                        </body>
-                    </body>
-                </body>
-            </worldbody>
-            
-            <actuator>
-                <motor name="fl_hip_motor" joint="fl_hip_joint" gear="50" ctrllimited="true" ctrlrange="-50 50"/>
-                <motor name="fl_thigh_motor" joint="fl_thigh_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                <motor name="fl_shank_motor" joint="fl_shank_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                
-                <motor name="fr_hip_motor" joint="fr_hip_joint" gear="50" ctrllimited="true" ctrlrange="-50 50"/>
-                <motor name="fr_thigh_motor" joint="fr_thigh_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                <motor name="fr_shank_motor" joint="fr_shank_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                
-                <motor name="hl_hip_motor" joint="hl_hip_joint" gear="50" ctrllimited="true" ctrlrange="-50 50"/>
-                <motor name="hl_thigh_motor" joint="hl_thigh_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                <motor name="hl_shank_motor" joint="hl_shank_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                
-                <motor name="hr_hip_motor" joint="hr_hip_joint" gear="50" ctrllimited="true" ctrlrange="-50 50"/>
-                <motor name="hr_thigh_motor" joint="hr_thigh_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-                <motor name="hr_shank_motor" joint="hr_shank_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
-            </actuator>
-        </mujoco>
-        """
-        return xml
-    
     def set_initial_configuration(self):
         """Set initial joint positions to nominal standing configuration"""
         # Standing pose: legs slightly bent
@@ -181,7 +71,7 @@ class RobotSimulation:
                 self.data.qpos[qpos_addr] = nominal_config[i]
 
         # Lower base height so feet touch ground
-        self.data.qpos[2] = 0.35  # Z position
+        self.data.qpos[2] = 0.320  # Z position
         
         # Forward kinematics to update everything
         mujoco.mj_forward(self.model, self.data)
@@ -414,6 +304,155 @@ class RobotSimulation:
             # reduce kp/kd for subsequent steps (affects next calls)
             # store them for observation (we don't mutate kp in this call; next loop will pick the reduced values if you implement it)
             print(f"[INFO] Suggested autoscale factor now {self._autoscale_factor:.3f}")
+
+    def apply_control_new(self, u: np.ndarray, contact_states: np.ndarray | None = None):
+        """
+        τ_total = Jᵀ λ + τ_PD. PD uses shortest-angle errors for stability.
+        """
+        # --- verify mode ---
+        if getattr(self, "verify", False):
+            if not hasattr(self, "_verified_once"):
+                self.debug_mujoco_mapping()
+                print("\n=== ACTUATOR PROPERTIES (ctrlrange, gear) ===")
+                for a in range(self.model.nu):
+                    cmin, cmax = self.model.actuator_ctrlrange[a]
+                    try:
+                        gear = float(self.model.actuator_gear[a, 0])
+                    except Exception:
+                        gear = 1.0
+                    print(f"  act {a:2d}  ctrlrange=[{cmin:.1f} {cmax:.1f}]  gear={gear:.1f}")
+                self._verified_once = True
+            self.data.ctrl[:] = 0.0
+            return
+
+        # ---- unpack ----
+        lam = np.asarray(u[0:12]).reshape(4, 3)     # [FL, FR, HL, RH] × (Fx,Fy,Fz)
+        u_j_desired = np.asarray(u[12:24]).reshape(-1)
+        dt = float(self.model.opt.timestep)
+
+        # ---- joint states (12) ----
+        joint_ids = self.joint_indices[:12]
+        q  = np.zeros(12)
+        qd = np.zeros(12)
+        dofaddrs = []
+        for i, jid in enumerate(joint_ids):
+            qposadr = int(self.model.jnt_qposadr[jid])
+            dofadr  = int(self.model.jnt_dofadr[jid])
+            q[i]  = float(self.data.qpos[qposadr])
+            qd[i] = float(self.data.qvel[dofadr])
+            dofaddrs.append(dofadr)
+
+        # ---- posture hold if no vel ref ----
+        if not hasattr(self, "_q_nominal") or self._q_nominal is None:
+            self._q_nominal = np.array([0.0, 0.6, -1.2] * 4)
+
+        if np.linalg.norm(u_j_desired) < 1e-6:
+            q_des  = self._q_nominal.copy()
+            qd_des = np.zeros_like(qd)
+        else:
+            q_des  = q + u_j_desired * dt
+            qd_des = u_j_desired
+
+        # ---- shortest-angle PD (wrap to (-pi,pi]) ----
+        def wrap_pi(e):
+            return (e + np.pi) % (2.0*np.pi) - np.pi
+
+        q_err  = wrap_pi(q_des - q)
+        qd_err = qd_des - qd
+
+        # per-joint gains (hip yaw softer)
+        kp_all, kd_all = 100.0, 10
+        kp_vec = np.array([0.25, 1.0, 1.0] * 4) * kp_all
+        kd_vec = np.array([0.30, 1.0, 1.0] * 4) * kd_all
+        tau_pd = kp_vec * q_err + kd_vec * qd_err
+
+        # ---- contact gating ----
+        if contact_states is None:
+            contact_states = np.zeros(4, dtype=int)
+            touching = set()
+            for k in range(self.data.ncon):
+                con = self.data.contact[k]
+                g1 = self.model.geom(con.geom1).name or ""
+                g2 = self.model.geom(con.geom2).name or ""
+                touching.add(g1); touching.add(g2)
+            foot_names = ["fl_foot", "fr_foot", "hl_foot", "hr_foot"]
+            for i, nm in enumerate(foot_names):
+                if nm in touching:
+                    contact_states[i] = 1
+        else:
+            contact_states = np.asarray(contact_states).astype(int).reshape(-1)[:4]
+
+        # ---- J^T λ using foot sites (fallback to shank) ----
+        site_names   = ["fl_foot_site", "fr_foot_site", "hl_foot_site", "hr_foot_site"]
+        body_fallback = ["fl_shank", "fr_shank", "hl_shank", "hr_shank"]
+
+        nv = self.model.nv
+        tau_lambda_nv = np.zeros(nv)
+        for leg in range(4):
+            if contact_states[leg] == 0:
+                continue
+            try:
+                sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site_names[leg])
+                jacp = np.zeros((3, nv), dtype=np.float64)
+                jacr = np.zeros((3, nv), dtype=np.float64)
+                mujoco.mj_jacSite(self.model, self.data, jacp, jacr, sid)
+            except Exception:
+                jacp = self.compute_leg_jacobian(body_fallback[leg])
+
+            f = lam[leg].copy()
+            f[2] = max(0.0, f[2])  # push, not pull
+            tau_lambda_nv += jacp.T @ f
+
+        tau_lambda = np.zeros(12)
+        for i in range(12):
+            dofadr = dofaddrs[i]
+            if 0 <= dofadr < nv:
+                tau_lambda[i] = tau_lambda_nv[dofadr]
+
+        # ---- blend & clamp ----
+        w_lambda = 0.8
+        tau_total_joint = np.clip(tau_pd + w_lambda * tau_lambda, -40.0, 40.0)
+
+        # ---- map torque -> ctrl via gear and clamp ----
+        if not hasattr(self, "_joint_to_actuator") or self._joint_to_actuator is None:
+            jtact = {}
+            for a in range(self.model.nu):
+                try:
+                    jid = int(self.model.actuator_trnid[a][0])
+                    jtact[jid] = a
+                except Exception:
+                    pass
+            self._joint_to_actuator = jtact
+
+        max_ctrl_mag = 0.0
+        for i, jid in enumerate(joint_ids):
+            act_idx = self._joint_to_actuator.get(jid, i if i < self.model.nu else None)
+            if act_idx is None:
+                continue
+            try:
+                gear = float(self.model.actuator_gear[act_idx, 0])
+                if not np.isfinite(gear) or abs(gear) < 1e-9:
+                    gear = 1.0
+            except Exception:
+                gear = 1.0
+
+            ctrl = float(tau_total_joint[i] / gear)
+            try:
+                cmin, cmax = self.model.actuator_ctrlrange[act_idx]
+                ctrl = float(np.clip(ctrl, cmin, cmax))
+            except Exception:
+                ctrl = float(np.clip(ctrl, -1.0, 1.0))
+
+            self.data.ctrl[act_idx] = ctrl
+            max_ctrl_mag = max(max_ctrl_mag, abs(ctrl))
+
+        try:
+            overall_max = float(np.max(self.model.actuator_ctrlrange[:, 1]))
+            if max_ctrl_mag > 0.9 * overall_max:
+                print(f"[WARN] |ctrl| near limit (max |ctrl|={max_ctrl_mag:.2f}). "
+                    f"Consider lowering kp/kd or w_lambda.")
+        except Exception:
+            pass
 
 
     def step_physics(self):
