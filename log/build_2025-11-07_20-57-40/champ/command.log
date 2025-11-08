@@ -1,4 +1,0 @@
-Invoking command in '/home/poojit/spot_ws/build/champ': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/poojit/spot_ws/install/spot_bringup:/opt/ros/jazzy /usr/bin/cmake --build /home/poojit/spot_ws/build/champ -- -j12 -l12
-Invoked command in '/home/poojit/spot_ws/build/champ' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/poojit/spot_ws/install/spot_bringup:/opt/ros/jazzy /usr/bin/cmake --build /home/poojit/spot_ws/build/champ -- -j12 -l12
-Invoking command in '/home/poojit/spot_ws/build/champ': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/poojit/spot_ws/install/spot_bringup:/opt/ros/jazzy /usr/bin/cmake --install /home/poojit/spot_ws/build/champ
-Invoked command in '/home/poojit/spot_ws/build/champ' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/poojit/spot_ws/install/spot_bringup:/opt/ros/jazzy /usr/bin/cmake --install /home/poojit/spot_ws/build/champ
