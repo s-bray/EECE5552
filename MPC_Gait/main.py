@@ -183,7 +183,7 @@ def main():
             # Update gait sequence
             if step % 50 == 0:
                 utilities = np.random.rand(4) * 0.5 + 0.5
-                controller.gait_gen.set_gait_mode('pace_walk')
+                controller.gait_gen.set_gait_mode('hybrid_walk')
                 controller.gait_gen.update_gait(utilities, dt_control * 50)
                 current_contact_states = controller.gait_gen.contact_states.copy()
                 print("qpos (base+quat):", sim.data.qpos[0:7])
