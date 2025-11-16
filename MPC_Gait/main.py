@@ -82,6 +82,7 @@ def main():
     SIMULATION_TIME = 30.0  # seconds
     IN_VERIFICATION = False
     WHEELS_ON = True
+    ENABLE_GAIT_DEBUG = True
     
     # Target velocity [vx, vy, vz, wx, wy, wz]
     TARGET_VELOCITY = np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0])  # Slower for stability
@@ -249,7 +250,7 @@ def main():
     
     # Set gait mode
     controller.gait_gen.set_gait_mode('hybrid_trot')  # Use trot for forward motion
-    ENABLE_GAIT_DEBUG = True
+
     try:
         for step in range(num_steps):
             t = step * dt_control
