@@ -1,4 +1,4 @@
-# main.py
+# main.py - FIXED VERSION
 
 import numpy as np
 import sys
@@ -31,11 +31,11 @@ def main():
     # Simulation parameters
     USE_GUI = True
     SIMULATION_TIME = 30.0  # seconds
-    IN_VERIFICATION = False   # <-- set False when running normally
-    WHEELS_ON = False
+    IN_VERIFICATION = False
+    WHEELS_ON = True
     
     # Target velocity [vx, vy, vz, wx, wy, wz]
-    TARGET_VELOCITY = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.5 m/s forward
+    TARGET_VELOCITY = np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0])  # Slower for stability
     
     # ==========================================
     # SETUP
@@ -48,7 +48,7 @@ def main():
         robot_inertia=np.diag([0.5, 1.0, 1.0]),
         horizon_length=0.8,
         num_nodes=20,
-        control_freq=50.0,
+        control_freq=15.0,
         weight_position=100.0,
         weight_orientation=50.0,
         weight_linear_velocity=10.0,
@@ -57,9 +57,9 @@ def main():
         weight_contact_force=0.01,
         weight_joint_velocity=0.1,
         friction_coeff=0.7,
-        max_joint_velocity=10.0,
+        max_joint_velocity=5.0,  # Reduced for stability
         max_contact_force=500.0,
-        swing_height=0.1,
+        swing_height=0.08,  # Lower swing
         swing_duration=0.3
     )
     
@@ -133,6 +133,53 @@ def main():
     print("="*60)
     
     # ==========================================
+    # CALCULATE TIMING PARAMETERS FIRST
+    # ==========================================
+    
+    dt_control = 1.0 / params.control_freq
+    num_steps = int(SIMULATION_TIME / dt_control)
+    
+    # Get simulation timestep
+    try:
+        sim_timestep = sim.model.opt.timestep
+    except Exception:
+        sim_timestep = 0.001
+    
+    if sim_timestep <= 0:
+        sim_timestep = 0.001
+        print(f"  ⚠️ Warning: Invalid sim_timestep, defaulting to {sim_timestep}s")
+
+    num_sim_steps_per_control = int(dt_control / sim_timestep)
+    
+    # ==========================================
+    # STABILIZATION PHASE
+    # ==========================================
+    
+    print("\n[Pre-flight] Stabilizing robot for 2 seconds...")
+    print("  ℹ Applying gravity compensation only...")
+    
+    stabilization_steps = int(2.0 * params.control_freq)  # 2 seconds at 50Hz
+    
+    for step in range(stabilization_steps):
+        # Get current state
+        x_current = sim.get_state()
+        
+        # Zero velocity command (just hold position)
+        u_stabilize = np.zeros(24)
+        
+        # Apply control with all feet in contact
+        contact_states_stable = np.ones(4)
+        
+        for _ in range(num_sim_steps_per_control):
+            sim.apply_control(u_stabilize, contact_states_stable)
+            sim.step_physics()
+        
+        sim.render()
+    
+    print("  ✓ Robot stabilized and ready!")
+    print("  ✓ Starting walking controller...\n")
+    
+    # ==========================================
     # MAIN CONTROL LOOP
     # ==========================================
     
@@ -140,22 +187,6 @@ def main():
     print("\n" + "="*60)
     print("SIMULATION RUNNING")
     print("="*60)
-    
-    dt_control = 1.0 / params.control_freq
-    num_steps = int(SIMULATION_TIME / dt_control)
-    
-    # --- NEW: Get simulation timestep ---
-    try:
-        sim_timestep = sim.model.opt.timestep
-    except Exception:
-        sim_timestep = 0.001  # Fallback
-    
-    # --- NEW: Calculate sim steps per control step ---
-    if sim_timestep <= 0:
-        sim_timestep = 0.001
-        print(f"  ⚠️ Warning: Invalid sim_timestep, defaulting to {sim_timestep}s")
-
-    num_sim_steps_per_control = int(dt_control / sim_timestep)
     print(f"  ✓ Control @ {params.control_freq}Hz, Sim @ {1.0/sim_timestep:.0f}Hz")
     print(f"  ✓ Running {num_sim_steps_per_control} sim steps per control step.")
     
@@ -164,8 +195,11 @@ def main():
     control_history = []
     cost_history = []
     
-    # Initial contact states
+    # Initial contact states - start with all feet on ground
     current_contact_states = np.ones(4)
+    
+    # Set gait mode
+    controller.gait_gen.set_gait_mode('hybrid_trot')  # Use trot for forward motion
     
     try:
         for step in range(num_steps):
@@ -180,21 +214,12 @@ def main():
                 params, x_current, TARGET_VELOCITY
             )
             
-            # Update gait sequence
-            if step % 50 == 0:
-                utilities = np.random.rand(4) * 0.5 + 0.5
-                controller.gait_gen.set_gait_mode('hybrid_walk')
-                controller.gait_gen.update_gait(utilities, dt_control * 50)
+            # Update gait sequence (every 5 control steps = 0.1s)
+            if step % 5 == 0:
+                # Use small dummy utilities (gait is pattern-based)
+                utilities = np.ones(4) * 0.8
+                controller.gait_gen.update_gait(utilities, dt_control * 5)
                 current_contact_states = controller.gait_gen.contact_states.copy()
-                print("qpos (base+quat):", sim.data.qpos[0:7])
-                print("qvel (first 6):", sim.data.qvel[0:6])
-                print("data.ctrl[:12]:", sim.data.ctrl[:12])
-                # contact info
-                print("ncon:", sim.data.ncon)
-                # optionally show contact forces (if available)
-                if hasattr(sim.data, "contact"):
-                    print("contact list length:", len(sim.data.contact))
-
             
             # Contact schedule for MPC
             contact_schedule = np.tile(current_contact_states, (params.num_nodes, 1))
@@ -204,29 +229,30 @@ def main():
                 x_current, x_ref_traj, contact_schedule
             )
             
-            # Apply control
+            # Apply control (with contact gating)
             u_apply = u_optimal[0]
             control_history.append(u_apply.copy())
+            
+            # Zero out forces for swing legs
+            for leg_idx in range(4):
+                if current_contact_states[leg_idx] == 0:
+                    u_apply[leg_idx*3:(leg_idx+1)*3] = 0.0
             
             # Compute cost
             cost = controller.compute_cost(x_current, u_apply, 
                                           x_ref_traj[0], np.zeros(24))
             cost_history.append(cost)
             
-            # --- 5. APPLY CONTROL & STEP SIM (Inner Loop) ---
-            # This inner loop runs at the SIMULATION frequency (e.g., 1000Hz)
-            # It applies the *same* command for the whole control interval
+            # Apply control and step physics (inner loop)
             for _ in range(num_sim_steps_per_control):
-                # We must re-apply the command at each physics step
-                # This is a "zero-order hold"
-                sim.apply_control_new(u_apply) # (Assumes simulation.py gains are 100/10)
-                sim.step_physics()         # Advance physics by 0.001s
+                sim.apply_control(u_apply, current_contact_states)
+                sim.step_physics()
             
-            # --- 6. RENDER (once per control step) ---
+            # Render
             sim.render()
-            
-            # --- 7. PRINT STATUS ---
-            if step % int(params.control_freq) == 0: # Print once per second
+
+            # Print status (every second)
+            if step % int(params.control_freq) == 0:
                 pos = x_current[3:6]
                 vel = x_current[9:12]
                 contact_str = ''.join(['█' if c else '░' for c in current_contact_states])

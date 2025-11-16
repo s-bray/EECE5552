@@ -24,7 +24,7 @@ def create_simple_quadruped_xml():
             <light pos="0 0 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
             <geom name="floor" pos="0 0 -0.1" size="5 5 .05" type="plane" material="grid"/>
             
-            <body name="base" pos="0 0 0.5">
+            <body name="base" pos="0 0 0.45">
                 <freejoint/>
                 <geom name="torso" type="box" size="0.3 0.15 0.08" mass="18.0" rgba="0.2 0.2 0.8 1"/>
                 <geom name="torso_imu" type="sphere" size="0.02" pos="0 0 0" mass="0.1" rgba="1 0 0 1"/>
@@ -118,7 +118,7 @@ def create_simple_quadruped_xml():
 
 def create_simple_quadruped_xml_wheels():
     xml_with_wheels = """
-        <mujoco model="simple_quadruped_wheels">
+        <mujoco model="quadruped_forward_wheels">
             <compiler angle="radian" coordinate="local"/>
             <option timestep="0.001" gravity="0 0 -9.81"/>
 
@@ -138,7 +138,7 @@ def create_simple_quadruped_xml_wheels():
                 <light pos="0 0 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
                 <geom name="floor" pos="0 0 -0.1" size="5 5 .05" type="plane" material="grid"/>
 
-                <body name="base" pos="0 0 0.5">
+                <body name="base" pos="0 0 0.45">
                     <freejoint/>
                     <geom name="torso" type="box" size="0.3 0.15 0.08" mass="18.0" rgba="0.2 0.2 0.8 1"/>
                     <geom name="torso_imu" type="sphere" size="0.02" pos="0 0 0" mass="0.1" rgba="1 0 0 1"/>
@@ -156,12 +156,17 @@ def create_simple_quadruped_xml_wheels():
                                 <joint name="fl_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
-                                <!-- wheel -->
+                                <!-- FORWARD-ONLY WHEEL with one-way clutch simulation -->
                                 <body name="fl_wheel" pos="0 0 -0.22">
-                                    <joint name="fl_wheel_joint" type="hinge" axis="0 1 0" damping="0.01" range="-360 360"/>
-                                    <geom name="fl_wheel_geom" type="cylinder" size="0.03 0.01"
+                                    <!-- Limited range prevents backward rotation -->
+                                    <joint name="fl_wheel_joint" type="hinge" axis="0 1 0" 
+                                        range="0 1000" 
+                                        damping="0.1" 
+                                        frictionloss="0.05"/>
+                                    
+                                    <geom name="fl_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
-                                        friction="1.2 0.003 0.00001"/>
+                                        friction="1.5 0.005 0.0001"/>
                                 </body>
                             </body>
                         </body>
@@ -180,12 +185,15 @@ def create_simple_quadruped_xml_wheels():
                                 <joint name="fr_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
-                                <!-- wheel -->
                                 <body name="fr_wheel" pos="0 0 -0.22">
-                                    <joint name="fr_wheel_joint" type="hinge" axis="0 1 0" damping="0.01" range="-360 360"/>
-                                    <geom name="fr_wheel_geom" type="cylinder" size="0.03 0.01"
+                                    <joint name="fr_wheel_joint" type="hinge" axis="0 1 0" 
+                                        range="0 1000" 
+                                        damping="0.1" 
+                                        frictionloss="0.05"/>
+                                    
+                                    <geom name="fr_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
-                                        friction="1.2 0.003 0.00001"/>
+                                        friction="1.5 0.005 0.0001"/>
                                 </body>
                             </body>
                         </body>
@@ -204,12 +212,15 @@ def create_simple_quadruped_xml_wheels():
                                 <joint name="hl_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
-                                <!-- wheel -->
                                 <body name="hl_wheel" pos="0 0 -0.22">
-                                    <joint name="hl_wheel_joint" type="hinge" axis="0 1 0" damping="0.01" range="-360 360"/>
-                                    <geom name="hl_wheel_geom" type="cylinder" size="0.03 0.01"
+                                    <joint name="hl_wheel_joint" type="hinge" axis="0 1 0" 
+                                        range="0 1000" 
+                                        damping="0.1" 
+                                        frictionloss="0.05"/>
+                                    
+                                    <geom name="hl_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
-                                        friction="1.2 0.003 0.00001"/>
+                                        friction="1.5 0.005 0.0001"/>
                                 </body>
                             </body>
                         </body>
@@ -228,12 +239,15 @@ def create_simple_quadruped_xml_wheels():
                                 <joint name="hr_shank_joint" type="hinge" axis="0 1 0" range="-2.5 -0.2" damping="1.0"/>
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
-                                <!-- wheel -->
                                 <body name="hr_wheel" pos="0 0 -0.22">
-                                    <joint name="hr_wheel_joint" type="hinge" axis="0 1 0" damping="0.01" range="-360 360"/>
-                                    <geom name="hr_wheel_geom" type="cylinder" size="0.03 0.01"
+                                    <joint name="hr_wheel_joint" type="hinge" axis="0 1 0" 
+                                        range="0 1000" 
+                                        damping="0.1" 
+                                        frictionloss="0.05"/>
+                                    
+                                    <geom name="hr_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
-                                        friction="1.2 0.003 0.00001"/>
+                                        friction="1.5 0.005 0.0001"/>
                                 </body>
                             </body>
                         </body>
@@ -242,7 +256,7 @@ def create_simple_quadruped_xml_wheels():
             </worldbody>
 
             <actuator>
-                <!-- leg motors -->
+                <!-- Leg motors (12 total) -->
                 <motor name="fl_hip_motor" joint="fl_hip_joint" gear="50" ctrllimited="true" ctrlrange="-50 50"/>
                 <motor name="fl_thigh_motor" joint="fl_thigh_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
                 <motor name="fl_shank_motor" joint="fl_shank_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
@@ -259,11 +273,11 @@ def create_simple_quadruped_xml_wheels():
                 <motor name="hr_thigh_motor" joint="hr_thigh_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
                 <motor name="hr_shank_motor" joint="hr_shank_joint" gear="150" ctrllimited="true" ctrlrange="-150 150"/>
 
-                <!-- optional wheel actuators (set ctrl=0 for passive rolling) -->
-                <motor name="fl_wheel_motor" joint="fl_wheel_joint" gear="10" ctrllimited="true" ctrlrange="-5 5"/>
-                <motor name="fr_wheel_motor" joint="fr_wheel_joint" gear="10" ctrllimited="true" ctrlrange="-5 5"/>
-                <motor name="hl_wheel_motor" joint="hl_wheel_joint" gear="10" ctrllimited="true" ctrlrange="-5 5"/>
-                <motor name="hr_wheel_motor" joint="hr_wheel_joint" gear="10" ctrllimited="true" ctrlrange="-5 5"/>
+                <!-- Optional: Wheel motors for active drive (leave at 0 for passive freewheeling forward) -->
+                <motor name="fl_wheel_motor" joint="fl_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
+                <motor name="fr_wheel_motor" joint="fr_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
+                <motor name="hl_wheel_motor" joint="hl_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
+                <motor name="hr_wheel_motor" joint="hr_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
             </actuator>
         </mujoco>
 
