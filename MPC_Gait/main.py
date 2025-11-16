@@ -10,6 +10,55 @@ from mpc_controller import MPCController
 from simulation import RobotSimulation
 from utils import generate_reference_trajectory
 
+def debug_gait_pattern(step, t, x_current, current_contact_states, dynamics):
+    """
+    Print detailed gait debugging info every second
+    Call this inside your control loop
+    """
+    
+    if step % 50 != 0:  # Every 1 second at 50Hz
+        return
+    
+    # Extract state
+    theta = x_current[0:3]
+    p = x_current[3:6]
+    q_j = x_current[12:24]
+    
+    # Compute foot positions using FK
+    foot_positions = dynamics.compute_contact_positions(q_j, theta)
+    
+    # Contact visualization
+    contact_str = ''.join(['█' if c else '░' for c in current_contact_states])
+    
+    # Check diagonal pattern
+    fl_rh_same = (current_contact_states[0] == current_contact_states[3])
+    fr_hl_same = (current_contact_states[1] == current_contact_states[2])
+    diagonal_opposite = (current_contact_states[0] != current_contact_states[1])
+    
+    pattern_ok = fl_rh_same and fr_hl_same and diagonal_opposite
+    
+    # Foot heights
+    foot_z = [fp[2] for fp in foot_positions]
+    
+    print(f"\n[DEBUG t={t:.2f}s] Gait Analysis:")
+    print(f"  Contacts: {contact_str} | FL:{int(current_contact_states[0])} "
+          f"FR:{int(current_contact_states[1])} HL:{int(current_contact_states[2])} "
+          f"HR:{int(current_contact_states[3])}")
+    print(f"  Pattern Check: {'✓ OK' if pattern_ok else '✗ WRONG'}")
+    print(f"    FL+RH same? {fl_rh_same} | FR+HL same? {fr_hl_same} | Opposite? {diagonal_opposite}")
+    print(f"  Foot heights (z): FL={foot_z[0]:.3f} FR={foot_z[1]:.3f} "
+          f"HL={foot_z[2]:.3f} HR={foot_z[3]:.3f}")
+    
+    # Check if swing legs are lifting
+    for leg_idx, name in enumerate(['FL', 'FR', 'HL', 'HR']):
+        if current_contact_states[leg_idx] == 0:  # Swing leg
+            if foot_z[leg_idx] < 0.05:  # Should be lifted
+                print(f"  ⚠️ WARNING: {name} in swing but z={foot_z[leg_idx]:.3f}m (should be >0.05m)")
+    
+    # Check forward motion
+    print(f"  Base position: x={p[0]:.3f}, y={p[1]:.3f}, z={p[2]:.3f}")
+
+
 def main():
     """Main driver code for MPC-based walking controller"""
     
@@ -200,7 +249,7 @@ def main():
     
     # Set gait mode
     controller.gait_gen.set_gait_mode('hybrid_trot')  # Use trot for forward motion
-    
+    ENABLE_GAIT_DEBUG = True
     try:
         for step in range(num_steps):
             t = step * dt_control
@@ -220,6 +269,11 @@ def main():
                 utilities = np.ones(4) * 0.8
                 controller.gait_gen.update_gait(utilities, dt_control * 5)
                 current_contact_states = controller.gait_gen.contact_states.copy()
+            
+            # ===== DEBUG GAIT PATTERN =====
+            if ENABLE_GAIT_DEBUG:
+                debug_gait_pattern(step, t, x_current, current_contact_states, dynamics)
+            # ==============================
             
             # Contact schedule for MPC
             contact_schedule = np.tile(current_contact_states, (params.num_nodes, 1))
