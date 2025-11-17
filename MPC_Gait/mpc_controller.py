@@ -16,6 +16,7 @@ class MPCController:
         self.gait_gen = GaitSequenceGenerator(params)
         self.max_iterations = 5
         self.learning_rate = 0.01
+        self.control_dim = 24   # 12 contact forces + 12 joint velocities
         
     def compute_cost(self, x: np.ndarray, u: np.ndarray, 
                     x_ref: np.ndarray, u_ref: np.ndarray) -> float:
@@ -80,35 +81,120 @@ class MPCController:
         
         return u_constrained
     
-    def solve_mpc(self, x0: np.ndarray, x_ref_traj: np.ndarray, 
-                 contact_schedule: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Solve MPC optimization problem"""
+    def solve_mpc(self, x0: np.ndarray, x_ref_traj: np.ndarray,
+                contact_schedule: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Simple stance-aware MPC rollout that:
+        1) supports body weight by splitting mg across stance legs,
+        2) adds a horizontal push toward the body velocity reference,
+        3) enforces friction cone & limits before integrating SRBD.
+
+        Args:
+            x0:            current state (24,)
+            x_ref_traj:    reference state trajectory (N,24)
+            contact_schedule: contact flags per node (N,4) with 1=stance, 0=swing
+
+        Returns:
+            u_seq:  control sequence (N,24)  [lambda_e(12), u_j(12)]
+            x_traj: predicted state rollout (N,24)
+        """
         N = self.params.num_nodes
         dt = self.params.dt
-        
-        u_seq = np.zeros((N, 24))
-        u_ref = np.zeros(24)
-        
-        for iteration in range(self.max_iterations):
-            x_traj = np.zeros((N, 24))
-            x_traj[0] = x0
+
+        # Allocate
+        u_seq = np.zeros((N, self.control_dim))
+        x_traj = np.zeros((N, self.dynamics.state_dim))
+        x_traj[0] = x0
+
+        # Gains (you can tune these 2–4 and 0.2–1.0)
+        kv = 2.0        # horizontal velocity tracking gain (-> desired force m*kv*(v_ref - v))
+        kq = 0.1        # small joint regularization toward x_ref q_j
+
+        # We'll iterate a few times to refine the horizontal push
+        for _ in range(self.max_iterations):
             total_cost = 0.0
-            
+            x_traj[0] = x0
+
             for k in range(N - 1):
-                u_seq[k] = self.enforce_constraints(u_seq[k], contact_schedule[k])
-                total_cost += self.compute_cost(x_traj[k], u_seq[k], 
-                                               x_ref_traj[k], u_ref)
-                
-                x_traj[k+1] = self.dynamics.integrate_euler(
-                    x_traj[k], u_seq[k], contact_schedule[k], dt
-                )
-            
+                xk = x_traj[k]
+                xref_k = x_ref_traj[k]
+
+                theta_k = xk[0:3]
+                v_k     = xk[9:12]
+                v_ref   = xref_k[9:12]
+                qk      = xk[12:24]
+                qref_k  = xref_k[12:24]
+
+                stance = np.asarray(contact_schedule[k]).astype(int)
+                n_stance = int(np.sum(stance))
+
+                # --------------------------
+                # Construct lambda_e (body frame)
+                # --------------------------
+                lam = np.zeros((4, 3))
+
+                if n_stance > 0:
+                    # Gravity in body frame -> required total normal force
+                    g_b = self.dynamics.gravity_in_body_frame(theta_k)
+                    Fz_total = -self.params.robot_mass * g_b[2]
+                    Fz_each = max(0.0, Fz_total / n_stance)
+
+                    # Horizontal push toward velocity reference
+                    Fxy_des = self.params.robot_mass * kv * (v_ref - v_k)
+
+                    for leg in range(4):
+                        if stance[leg] == 1:
+                            lam[leg, 0] = Fxy_des[0] / n_stance   # Fx per stance leg
+                            lam[leg, 1] = Fxy_des[1] / n_stance   # Fy per stance leg
+                            lam[leg, 2] = Fz_each                 # Fz support
+                        else:
+                            lam[leg, :] = 0.0
+                else:
+                    # No stance foot (shouldn't happen in your patterns); safe fallback
+                    lam[:, :] = 0.0
+
+                # --------------------------
+                # Joint-velocity regularization (gentle hold)
+                # (If you generate swing IK in main.py, that will overwrite this.)
+                # --------------------------
+                u_j = kq * (qref_k - qk)
+                u_j = np.clip(u_j, -self.params.max_joint_velocity, self.params.max_joint_velocity)
+
+                # Pack control and enforce physical constraints
+                uk = np.zeros(self.control_dim)
+                uk[0:12] = lam.flatten()
+                uk[12:24] = u_j
+                uk = self.enforce_constraints(uk, stance)
+
+                u_seq[k] = uk
+
+                # Cost (purely diagnostic here)
+                total_cost += self.compute_cost(xk, uk, xref_k, np.zeros(self.control_dim))
+
+                # Roll dynamics one step with these controls
+                x_traj[k + 1] = self.dynamics.integrate_euler(xk, uk, stance, dt)
+
+            # Small refinement: if predicted v is still off, nudge horizontal forces
             for k in range(N - 1):
-                state_error = x_ref_traj[k+1] - x_traj[k+1]
-                lambda_update = state_error[9:12] * self.params.robot_mass * 0.1
-                u_j_update = state_error[12:24] * 0.5
-                
-                u_seq[k][0:3] += lambda_update * self.learning_rate
-                u_seq[k][12:24] += u_j_update * self.learning_rate
-        
+                stance = np.asarray(contact_schedule[k]).astype(int)
+                n_stance = int(np.sum(stance))
+                if n_stance == 0:
+                    continue
+
+                v_err_next = x_ref_traj[k + 1, 9:12] - x_traj[k + 1, 9:12]
+                dFxy = self.params.robot_mass * 0.5 * v_err_next  # secondary gain
+
+                for leg in range(4):
+                    if stance[leg] == 1:
+                        base = 3 * leg
+                        u_seq[k, base + 0] += (dFxy[0] / n_stance) * self.learning_rate
+                        u_seq[k, base + 1] += (dFxy[1] / n_stance) * self.learning_rate
+
+                # Re-enforce constraints after tweaking
+                u_seq[k] = self.enforce_constraints(u_seq[k], stance)
+
+        # Last control = previous (simple hold)
+        if N >= 2:
+            u_seq[-1] = u_seq[-2]
+
         return u_seq, x_traj

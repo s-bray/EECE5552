@@ -167,9 +167,9 @@ class RobotSimulation:
         dt = float(self.model.opt.timestep)
         
         # ===== PD GAINS (TUNED FOR STABILITY) =====
-        kp = 2.75   # Position gain
-        kd = 0.01    # Damping gain
-        tau_limit = 40.0  # Torque limit per joint
+        kp = 100.0  # Position gain
+        kd = 10.0   # Damping gain
+        tau_limit = 80.0  # Torque limit per joint
         
         # ===== READ CURRENT JOINT STATES =====
         q_current = np.zeros(12)
@@ -267,8 +267,9 @@ class RobotSimulation:
         
         # ===== TOTAL TORQUE =====
         # Weight contact forces moderately
-        w_contact = 0.3
+        w_contact = 1.0
         tau_total = tau_pd + w_contact * tau_contact + tau_gravity
+        # tau_total = tau_pd + tau_gravity
         
         # Clamp to limits
         tau_total = np.clip(tau_total, -tau_limit, tau_limit)
@@ -300,33 +301,41 @@ class RobotSimulation:
             
             self.data.ctrl[act_idx] = float(ctrl_signal)
     
-    # def _detect_contacts(self) -> np.ndarray:
-    #     """Detect which feet are in contact with ground"""
-    #     contact_states = np.zeros(4, dtype=int)
+    def _detect_contacts(self) -> np.ndarray:
+        """
+        Detect which feet are in contact with ground
+        Returns array [FL, FR, HL, HR] with 1=contact, 0=swing
+        """
+        contact_states = np.zeros(4, dtype=int)
         
-    #     foot_geoms = ['fl_foot', 'fr_foot', 'hl_foot', 'hr_foot']
+        # Foot geometry names (adjust if your XML uses different names)
+        foot_geoms = ['fl_foot', 'fr_foot', 'hl_foot', 'hr_foot']
         
-    #     for i in range(self.data.ncon):
-    #         contact = self.data.contact[i]
-    #         geom1_name = self.model.geom(contact.geom1).name or ""
-    #         geom2_name = self.model.geom(contact.geom2).name or ""
+        # Also check for wheel contact if wheels are present
+        wheel_geoms = ['fl_wheel_geom', 'fr_wheel_geom', 'hl_wheel_geom', 'hr_wheel_geom']
+        
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            geom1_name = self.model.geom(contact.geom1).name or ""
+            geom2_name = self.model.geom(contact.geom2).name or ""
             
-    #         for leg_idx, foot_name in enumerate(foot_geoms):
-    #             if foot_name in geom1_name or foot_name in geom2_name:
-    #                 contact_states[leg_idx] = 1
+            for leg_idx, (foot_name, wheel_name) in enumerate(zip(foot_geoms, wheel_geoms)):
+                if (foot_name in geom1_name or foot_name in geom2_name or
+                    wheel_name in geom1_name or wheel_name in geom2_name):
+                    contact_states[leg_idx] = 1
         
-    #     return contact_states
+        return contact_states
     
-    # def _compute_foot_jacobian(self, foot_site_name: str):
-    #     """Compute translational Jacobian for foot site"""
-    #     try:
-    #         site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, foot_site_name)
-    #         jacp = np.zeros((3, self.model.nv), dtype=np.float64)
-    #         jacr = np.zeros((3, self.model.nv), dtype=np.float64)
-    #         mujoco.mj_jacSite(self.model, self.data, jacp, jacr, site_id)
-    #         return jacp
-    #     except:
-    #         return None
+    def _compute_foot_jacobian(self, foot_site_name: str):
+        """Compute translational Jacobian for foot site"""
+        try:
+            site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, foot_site_name)
+            jacp = np.zeros((3, self.model.nv), dtype=np.float64)
+            jacr = np.zeros((3, self.model.nv), dtype=np.float64)
+            mujoco.mj_jacSite(self.model, self.data, jacp, jacr, site_id)
+            return jacp
+        except:
+            return None
     
     def apply_control_new(self, u: np.ndarray, contact_states: np.ndarray = None):
         """
@@ -396,8 +405,8 @@ class RobotSimulation:
         qd_err = qd_des - qd
 
         # Per-joint PD gains (hip yaw joints softer for stability)
-        kp_base = 2.5
-        kd_base = 0.0
+        kp_base = 50.0
+        kd_base = 10.0
         
         kp_vec = np.array([0.25, 1.0, 1.0] * 4) * kp_base  # Hip softer
         kd_vec = np.array([0.30, 1.0, 1.0] * 4) * kd_base
@@ -470,7 +479,7 @@ class RobotSimulation:
 
         # ===== TOTAL TORQUE CALCULATION =====
         # Weight contact forces appropriately
-        w_contact = 0.5  # Moderate weight (0.0 = ignore forces, 1.0 = full weight)
+        w_contact = 1.0  # Moderate weight (0.0 = ignore forces, 1.0 = full weight)
         
         tau_total_joint = tau_pd + w_contact * tau_contact + tau_gravity
         
@@ -532,47 +541,6 @@ class RobotSimulation:
         except Exception:
             pass
 
-
-    def _compute_foot_jacobian(self, body_name: str):
-        """
-        Compute translational Jacobian for a body (fallback method)
-        Returns shape (3, nv) or None on failure
-        """
-        try:
-            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-            nv = self.model.nv
-            jacp = np.zeros((3, nv), dtype=np.float64)
-            jacr = np.zeros((3, nv), dtype=np.float64)
-            mujoco.mj_jac(self.model, self.data, jacp, jacr, body_id)
-            return jacp
-        except Exception:
-            return None
-
-
-    def _detect_contacts(self) -> np.ndarray:
-        """
-        Detect which feet are in contact with ground
-        Returns array [FL, FR, HL, HR] with 1=contact, 0=swing
-        """
-        contact_states = np.zeros(4, dtype=int)
-        
-        # Foot geometry names (adjust if your XML uses different names)
-        foot_geoms = ['fl_foot', 'fr_foot', 'hl_foot', 'hr_foot']
-        
-        # Also check for wheel contact if wheels are present
-        wheel_geoms = ['fl_wheel_geom', 'fr_wheel_geom', 'hl_wheel_geom', 'hr_wheel_geom']
-        
-        for i in range(self.data.ncon):
-            contact = self.data.contact[i]
-            geom1_name = self.model.geom(contact.geom1).name or ""
-            geom2_name = self.model.geom(contact.geom2).name or ""
-            
-            for leg_idx, (foot_name, wheel_name) in enumerate(zip(foot_geoms, wheel_geoms)):
-                if (foot_name in geom1_name or foot_name in geom2_name or
-                    wheel_name in geom1_name or wheel_name in geom2_name):
-                    contact_states[leg_idx] = 1
-        
-        return contact_states
 
     def step_physics(self):
         """Step the simulation's physics by one timestep"""

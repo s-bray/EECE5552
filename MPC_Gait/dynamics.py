@@ -72,36 +72,35 @@ class SingleRigidBodyDynamics:
             [-v[1], v[0], 0]
         ])
     
-    def compute_contact_positions(self, q_j: np.ndarray, 
-                                  base_orientation: np.ndarray) -> List[np.ndarray]:
-        """Compute end-effector positions relative to COM"""
-        contact_positions = []
-        
-        # Simplified leg geometry
-        hip_offset = 0.3  # m
-        thigh_length = 0.25  # m
-        shank_length = 0.25  # m
-        
-        hip_positions_body = [
-            np.array([hip_offset, hip_offset, 0]),   # LF
-            np.array([hip_offset, -hip_offset, 0]),  # RF
-            np.array([-hip_offset, hip_offset, 0]),  # LH
-            np.array([-hip_offset, -hip_offset, 0])  # RH
+    def compute_contact_positions(self, q_j: np.ndarray, base_orientation: np.ndarray):
+        """
+        Foot positions (in body frame) relative to COM for r×λ in SRBD.
+        Matches the XML: hip yaw (z), thigh(+y), shank(+y).
+        """
+        L1 = 0.22
+        L2 = 0.22
+
+        hip_offsets = [
+            np.array([ 0.27,  0.17, -0.08]),  # FL
+            np.array([ 0.27, -0.17, -0.08]),  # FR
+            np.array([-0.27,  0.17, -0.08]),  # HL
+            np.array([-0.27, -0.17, -0.08]),  # HR
         ]
-        
+
+        contact_positions = []
         for i in range(4):
             q_hip, q_thigh, q_shank = q_j[i*3:(i+1)*3]
-            
-            x = thigh_length * np.sin(q_thigh) + shank_length * np.sin(q_thigh + q_shank)
-            z = -thigh_length * np.cos(q_thigh) - shank_length * np.cos(q_thigh + q_shank)
-            
-            foot_hip = np.array([x, 0, z])
-            R_hip = Rotation.from_euler('z', q_hip).as_matrix()
-            foot_hip_rotated = R_hip @ foot_hip
-            r_ei = hip_positions_body[i] + foot_hip_rotated
-            
+            Rz = Rotation.from_euler('z', q_hip).as_matrix()
+            Ry1 = Rotation.from_euler('y', q_thigh).as_matrix()
+            Ry2 = Rotation.from_euler('y', q_thigh + q_shank).as_matrix()
+
+            p_thigh = Ry1 @ np.array([0.0, 0.0, -L1])
+            p_shank = Ry2 @ np.array([0.0, 0.0, -L2])
+
+            p_hip_to_foot = Rz @ (p_thigh + p_shank)
+            r_ei = hip_offsets[i] + p_hip_to_foot
             contact_positions.append(r_ei)
-        
+
         return contact_positions
     
     def dynamics(self, x: np.ndarray, u: np.ndarray, 
@@ -138,7 +137,8 @@ class SingleRigidBodyDynamics:
         
         g_body = self.gravity_in_body_frame(theta)
         net_force = np.sum(lambda_e, axis=0)
-        v_dot = g_body + net_force / self.m
+        # v_dot = g_body + net_force / self.m
+        v_dot = -self.skew_symmetric(omega) @ v + g_body + net_force / self.m
         
         q_j_dot = u_j
         
