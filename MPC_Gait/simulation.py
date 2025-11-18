@@ -33,27 +33,48 @@ class RobotSimulation:
         
         self.data = mujoco.MjData(self.model)
         
-        # Find actuated joints (CRITICAL: proper ordering)
+        # Find actuated joints - FIXED for programmatic XML
         self.joint_indices = []
         self.joint_names = []
-        
-        # Expected order: FL, FR, HL, HR (each has hip, thigh, shank)
-        leg_order = ['fl', 'fr', 'hl', 'hr']
-        joint_types = ['hip', 'thigh', 'shank']
-        
-        for leg in leg_order:
-            for jtype in joint_types:
-                joint_name = f"{leg}_{jtype}"
-                try:
-                    joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-                    self.joint_indices.append(joint_id)
-                    self.joint_names.append(joint_name)
-                except:
-                    print(f"  ⚠️ Warning: Joint '{joint_name}' not found")
-        
-        print(f"  ℹ Found {len(self.joint_indices)} controllable joints")
+
+        # For programmatic XML, joints are created in order after freejoint
+        # Freejoint uses qpos[0:7], so first real joint starts at qpos[7]
+        # But joint IDs start from 0
+
+        print("\n[DEBUG] Scanning all joints in model:")
+        for joint_id in range(self.model.njnt):
+            joint_type = self.model.jnt_type[joint_id]
+            joint_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            qpos_addr = self.model.jnt_qposadr[joint_id]
+            dof_addr = self.model.jnt_dofadr[joint_id]
+            
+            if joint_name is None:
+                joint_name = f"joint_{joint_id}"
+            
+            print(f"  Joint {joint_id}: {joint_name:20s} type={joint_type} "
+                f"qpos[{qpos_addr}] dof[{dof_addr}]")
+            
+            # Skip freejoint (type 0)
+            if joint_type != mujoco.mjtJoint.mjJNT_FREE:
+                self.joint_indices.append(joint_id)
+                self.joint_names.append(joint_name)
+
+        print(f"\n  ℹ Found {len(self.joint_indices)} controllable joints")
         print(f"  Joint order: {self.joint_names[:12]}")
         
+        # ===== ADD THIS DEBUG =====
+        print("\n[DEBUG] Joint ID mapping:")
+        for i, (name, jid) in enumerate(zip(self.joint_names[:12], self.joint_indices[:12])):
+            qpos_addr = self.model.jnt_qposadr[jid]
+            print(f"  {i:2d}. {name:15s} -> joint_id={jid:2d} qpos_addr={qpos_addr:3d}")
+
+        # Check if all IDs are the same
+        unique_ids = set(self.joint_indices[:12])
+        if len(unique_ids) == 1:
+            print(f"\n⚠️⚠️⚠️ CRITICAL BUG: All joints mapped to same ID ({unique_ids.pop()})!")
+            print("  This means joint names don't match XML or lookup is failing!")
+        # ===== END DEBUG =====
+
         # Build actuator mapping
         self._build_actuator_mapping()
         
@@ -84,7 +105,7 @@ class RobotSimulation:
         """Set initial joint positions to nominal standing configuration"""
         # Standing pose: legs slightly bent
         nominal_config = [
-            0.0, 0.6, -1.2,  # FL: hip, thigh, shank
+            0.0, 0.6, -1.2,  # FL
             0.0, 0.6, -1.2,  # FR
             0.0, 0.6, -1.2,  # HL
             0.0, 0.6, -1.2,  # HR
@@ -96,7 +117,7 @@ class RobotSimulation:
                 self.data.qpos[qpos_addr] = nominal_config[i]
 
         # Set base height
-        self.data.qpos[2] = 0.38  # Z position
+        self.data.qpos[2] = 0.40  # Z position
         
         # Forward kinematics
         mujoco.mj_forward(self.model, self.data)
@@ -130,11 +151,29 @@ class RobotSimulation:
         v_body = R_BW @ base_vel_linear_world
         omega_body = R_BW @ base_vel_angular_world
 
-        # Joint positions - proper mapping
+        # ===== FIXED: Joint positions with explicit checking =====
         joint_positions = []
-        for joint_idx in self.joint_indices[:12]:
+        
+        # Debug first time
+        if not hasattr(self, '_qpos_debug_done'):
+            print("\n[DEBUG] Joint reading check:")
+            self._qpos_debug_done = True
+        
+        for i, joint_idx in enumerate(self.joint_indices[:12]):
             qpos_addr = int(self.model.jnt_qposadr[joint_idx])
-            joint_positions.append(self.data.qpos[qpos_addr])
+            joint_val = float(self.data.qpos[qpos_addr])
+            joint_positions.append(joint_val)
+            
+            # Debug first time
+            if not hasattr(self, f'_joint_debug_{i}_done'):
+                setattr(self, f'_joint_debug_{i}_done', True)
+                print(f"  Joint {i:2d} ({self.joint_names[i]:15s}): "
+                    f"qpos[{qpos_addr:3d}] = {np.rad2deg(joint_val):7.2f}°")
+        
+        # Sanity check: joints should NOT all be the same!
+        if len(set([round(q, 3) for q in joint_positions])) == 1:
+            print(f"⚠️ WARNING: All joints have same value! ({joint_positions[0]:.3f})")
+            print(f"   This indicates incorrect qpos addressing!")
 
         # Pad if necessary
         while len(joint_positions) < 12:
@@ -347,7 +386,17 @@ class RobotSimulation:
         3. Correct Jacobian usage
         4. Stability improvements
         """
-        
+
+        # DEBUG: Print what we received
+        u_j_commanded = u[12:24]
+        if np.linalg.norm(u_j_commanded) > 0.1:  # Non-zero command
+            if not hasattr(self, '_cmd_check_counter'):
+                self._cmd_check_counter = 0
+            self._cmd_check_counter += 1
+            
+            if self._cmd_check_counter % 100 == 0:
+                print(f"[CTRL] Received joint velocities: {u_j_commanded[:6]}")
+
         # ===== VERIFICATION MODE =====
         if getattr(self, "verify", False):
             if not hasattr(self, "_verified_once"):
@@ -405,8 +454,8 @@ class RobotSimulation:
         qd_err = qd_des - qd
 
         # Per-joint PD gains (hip yaw joints softer for stability)
-        kp_base = 50.0
-        kd_base = 10.0
+        kp_base = 100.0
+        kd_base = 50.0
         
         kp_vec = np.array([0.25, 1.0, 1.0] * 4) * kp_base  # Hip softer
         kd_vec = np.array([0.30, 1.0, 1.0] * 4) * kd_base

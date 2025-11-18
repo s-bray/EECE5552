@@ -1,9 +1,7 @@
-# main.py - FIXED DEBUG VERSION
+# main.py 
 
 import numpy as np
 import sys
-
-# Import components from other files
 from config import MPCParameters
 from dynamics import SingleRigidBodyDynamics
 from mpc_controller import MPCController
@@ -11,6 +9,87 @@ from simulation import RobotSimulation
 from scipy.spatial.transform import Rotation
 from kinematics import ik_sagittal
 from utils import generate_reference_trajectory
+from debug_swing import debug_swing_detailed, check_ik_reachability, test_ik_at_swing_phases
+
+def compute_stance_control(leg_idx, q_now):
+    """
+    Gentle position hold for stance legs
+    SIMPLIFIED: No velocity feedback to avoid state vector issues
+    
+    Args:
+        leg_idx: Leg index (0-3)
+        q_now: Current joint positions [3]
+    
+    Returns:
+        u_joint: Joint velocity command [3]
+    """
+    # Nominal stance configuration
+    q_nom = np.array([0.0, 0.6, -1.29])
+    
+    # Simple proportional control (no derivative term)
+    kp_stance = 3.0
+    
+    u_joint = kp_stance * (q_nom - q_now)
+    
+    return u_joint
+
+def compute_swing_ik_simple(leg_idx, swing_phase, q_now):
+    """
+    TUNED VERSION: Bigger steps, more clearance
+    """
+    
+    s = swing_phase
+    ss = 6*s**5 - 15*s**4 + 10*s**3
+    
+    L1, L2 = 0.22, 0.22
+    
+    # TUNED FOR FORWARD LOCOMOTION
+    step_length = 0.12   # 12cm steps (was 6cm)
+    clearance = 0.05     # 5cm lift (was 3cm)
+    
+    # Start position (lift-off)
+    x0 = 0.05            # Start further back (was 0.08)
+    z0 = -(L1 + L2 - 0.10)  # Less extended initially
+    
+    # End position (touch-down)
+    x1 = x0 + step_length
+    z1 = z0
+    
+    # Interpolate
+    x = x0 + (x1 - x0) * ss
+    z = z0 + (z1 - z0) * ss + clearance * (1 - (2*s - 1)**2)
+    z = -abs(z)
+    
+    # SAFETY: Limit to 90% of max reach
+    dist = np.sqrt(x**2 + z**2)
+    max_reach = L1 + L2
+    
+    if dist > max_reach * 0.90:
+        scale = (max_reach * 0.88) / dist
+        x *= scale
+        z *= scale
+    
+    # IK with error handling
+    try:
+        q_thigh, q_shank = ik_sagittal(L1, L2, x, z)
+        
+        # Sanity check
+        if abs(q_thigh) > 1.6 or abs(q_shank) > 2.2:
+            raise ValueError("Joint angles extreme")
+            
+    except:
+        # Conservative fallback
+        q_thigh = 0.7
+        q_shank = -1.3
+    
+    q_des = np.array([0.0, q_thigh, -abs(q_shank)])
+    
+    # INCREASED GAIN for better tracking
+    kp_swing = 12.0  # Was 8.0
+    u_joint = kp_swing * (q_des - q_now)
+    
+    return u_joint
+
 
 def debug_gait_pattern(step, t, x_current, contact_states, dynamics):
     """
@@ -95,7 +174,7 @@ def main():
     USE_GUI = True
     SIMULATION_TIME = 30.0
     IN_VERIFICATION = False
-    WHEELS_ON = False
+    WHEELS_ON = True
     ENABLE_GAIT_DEBUG = True
     
     # REDUCED velocity for debugging
@@ -211,6 +290,10 @@ def main():
     
     print("  ✓ Robot stabilized!\n")
     
+    # At startup, before control loop:
+    print("\n[Diagnostic] Testing IK reachability...")
+    test_ik_at_swing_phases()
+
     # ==========================================
     # MAIN CONTROL LOOP
     # ==========================================
@@ -249,66 +332,55 @@ def main():
             # ===== DEBUG GAIT =====
             if ENABLE_GAIT_DEBUG:
                 debug_gait_pattern(step, t, x_current, current_contact_states, dynamics)
+                debug_swing_detailed(step, t, x_current, current_contact_states, dynamics, controller)
             
             # Contact schedule for MPC
             contact_schedule = np.tile(current_contact_states, (params.num_nodes, 1))
-            
-            # Build joint velocity command with IK
+
             u_joint = np.zeros(12)
-            L1, L2 = 0.22, 0.22
-            step_length = TARGET_VELOCITY[0] * controller.gait_gen.stride_duration * 0.5
-            clearance = params.swing_height
-            q_now = x_current[12:24].copy()
+            q_now = x_current[12:24].copy()  # Joint positions
 
             for leg in range(4):
-                s = controller.gait_gen.swing_phase[leg]
-                i = 3*leg
+                i = 3 * leg
+                q_leg_now = q_now[i:i+3]
+                
+                if current_contact_states[leg] == 0:  # SWING LEG
+                    swing_phase = controller.gait_gen.swing_phase[leg]
+                    u_joint[i:i+3] = compute_swing_ik_simple(leg, swing_phase, q_leg_now)
+                else:  # STANCE LEG
+                    u_joint[i:i+3] = compute_stance_control(leg, q_leg_now)
 
-                if current_contact_states[leg] == 0:  # SWING
-                    # Nominal starting/ending foot positions (in hip frame)
-                    x0, z0 = 0.10, -(L1 + L2 - 0.03)
-                    x1, z1 = x0 + step_length, z0
-                    
-                    # Quintic interpolation
-                    ss = 6*s**5 - 15*s**4 + 10*s**3
-                    
-                    # Swing arc
-                    x = x0 + (x1 - x0) * ss
-                    z = z0 + (z1 - z0) * ss + clearance * (1 - (2*s - 1)**2)
-                    
-                    # IK
-                    qh, qk = ik_sagittal(L1, L2, x, -abs(z))
-                    q_des_leg = np.array([0.0, qh, -abs(qk)])
-                    
-                    # High gain for swing
-                    u_joint[i:i+3] = 12.0 * (q_des_leg - q_now[i:i+3])
-                    
-                else:  # STANCE
-                    # Gentle hold
-                    q_nom_leg = np.array([0.0, 0.6, -1.3])
-                    u_joint[i:i+3] = 2.0 * (q_nom_leg - q_now[i:i+3])
+            # Clip to limits
+            u_joint = np.clip(u_joint, -params.max_joint_velocity, params.max_joint_velocity)
 
             # Solve MPC
             u_optimal, x_predicted = controller.solve_mpc(
                 x_current, x_ref_traj, contact_schedule
             )
-            
-            # Apply control
+
+            # Apply control (CREATE u_apply HERE!)
             u_apply = u_optimal[0].copy()
-            u_apply[12:24] = np.clip(u_joint, -params.max_joint_velocity, 
-                                     params.max_joint_velocity)
+            u_apply[12:24] = u_joint  # Replace MPC joint commands with IK commands
+
             control_history.append(u_apply.copy())
-            
+
             # Zero forces on swing legs
             for leg_idx in range(4):
                 if current_contact_states[leg_idx] == 0:
                     u_apply[leg_idx*3:(leg_idx+1)*3] = 0.0
-            
+
+            # NOW you can debug u_apply
+            if step % 50 == 0:  # Every second
+                print(f"\n[CONTROL CHECK]")
+                print(f"  u_joint computed: {u_joint[:6]}")
+                print(f"  q_now: {q_now[:6]}")
+                print(f"  u_apply[12:18]: {u_apply[12:18]}")  # ✓ Now it exists!
+
             # Compute cost
             cost = controller.compute_cost(x_current, u_apply, 
-                                          x_ref_traj[0], np.zeros(24))
+                                        x_ref_traj[0], np.zeros(24))
             cost_history.append(cost)
-            
+
             # Apply control and step physics
             for _ in range(num_sim_steps_per_control):
                 sim.apply_control_new(u_apply, current_contact_states)
