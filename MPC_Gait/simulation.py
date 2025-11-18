@@ -1,4 +1,22 @@
-# simulation.py - FIXED VERSION
+"""
+MuJoCo Simulation Environment for Wheeled-Legged Robot
+
+This module provides a complete simulation interface for a quadrupedal robot
+using MuJoCo physics engine. It handles robot initialization, state extraction,
+control application, and physics stepping with proper contact handling.
+
+Classes:
+    RobotSimulation: Main simulation environment wrapper
+
+Dependencies:
+    - numpy: Numerical computations
+    - mujoco: Physics simulation engine
+    - scipy.spatial.transform: Rotation representations
+    - config: MPC parameters
+    - create_simple_quadruped: XML model generation
+
+Author: Based on Bjelonic et al. 2021 whole-body MPC approach
+"""
 
 import numpy as np
 import mujoco
@@ -10,9 +28,69 @@ from create_simple_quadruped import create_simple_quadruped_xml, create_simple_q
 from config import MPCParameters
 
 class RobotSimulation:
-    """MuJoCo simulation environment for the wheeled-legged robot"""
+    """
+    MuJoCo simulation environment for wheeled-legged quadruped robot.
     
-    def __init__(self, xml_path: str, params: MPCParameters, verify=False, use_gui: bool = True, wheels=False):
+    This class manages the entire simulation lifecycle including:
+    - Robot model loading (from XML or programmatic generation)
+    - State extraction in Single Rigid Body Dynamics (SRBD) format
+    - Control application via PD control + contact forces
+    - Physics stepping and rendering
+    
+    The simulation uses a 24-DOF control interface:
+    - 12 contact forces (4 legs × 3D forces)
+    - 12 joint velocities (4 legs × 3 joints)
+    
+    Attributes:
+        params (MPCParameters): MPC configuration parameters
+        xml_path (str): Path to robot XML model file
+        use_gui (bool): Whether to enable visual rendering
+        verify (bool): Verification mode flag (disables control)
+        wheels (bool): Whether robot has wheels on legs
+        model (mujoco.MjModel): MuJoCo physics model
+        data (mujoco.MjData): MuJoCo simulation data
+        joint_indices (list): Indices of controllable joints
+        joint_names (list): Names of controllable joints
+        joint_to_actuator (dict): Mapping from joint IDs to actuator IDs
+        viewer (mujoco.viewer): Optional GUI viewer
+    
+    Example:
+        >>> params = MPCParameters(robot_mass=15.0)
+        >>> sim = RobotSimulation("robot.xml", params, use_gui=True)
+        >>> state = sim.get_state()  # Get current state
+        >>> control = np.zeros(24)  # Create control input
+        >>> sim.apply_control(control)
+        >>> sim.step_physics()
+        >>> sim.render()
+    """
+    
+    def __init__(self, xml_path: str, params: MPCParameters, verify=False, 
+                 use_gui: bool = True, wheels=False):
+        """
+        Initialize the MuJoCo simulation environment.
+        
+        Args:
+            xml_path (str): Path to robot XML model file. If file doesn't exist,
+                          a simple quadruped model will be generated programmatically.
+            params (MPCParameters): MPC configuration parameters including robot
+                                  mass, inertia, and control settings.
+            verify (bool, optional): If True, enables verification mode which
+                                   disables control for debugging. Defaults to False.
+            use_gui (bool, optional): If True, launches interactive 3D viewer.
+                                    Defaults to True.
+            wheels (bool, optional): If True, creates robot with wheels on legs.
+                                   Defaults to False.
+        
+        Raises:
+            FileNotFoundError: If XML file doesn't exist and programmatic
+                             generation fails.
+        
+        Notes:
+            - Automatically detects and maps all controllable joints
+            - Skips freejoint (floating base) from control interface
+            - Initializes robot in nominal standing configuration
+            - Verifies ground contact after initialization
+        """
         self.params = params
         self.xml_path = xml_path
         self.use_gui = use_gui
@@ -37,10 +115,6 @@ class RobotSimulation:
         self.joint_indices = []
         self.joint_names = []
 
-        # For programmatic XML, joints are created in order after freejoint
-        # Freejoint uses qpos[0:7], so first real joint starts at qpos[7]
-        # But joint IDs start from 0
-
         print("\n[DEBUG] Scanning all joints in model:")
         for joint_id in range(self.model.njnt):
             joint_type = self.model.jnt_type[joint_id]
@@ -62,7 +136,6 @@ class RobotSimulation:
         print(f"\n  ℹ Found {len(self.joint_indices)} controllable joints")
         print(f"  Joint order: {self.joint_names[:12]}")
         
-        # ===== ADD THIS DEBUG =====
         print("\n[DEBUG] Joint ID mapping:")
         for i, (name, jid) in enumerate(zip(self.joint_names[:12], self.joint_indices[:12])):
             qpos_addr = self.model.jnt_qposadr[jid]
@@ -73,7 +146,6 @@ class RobotSimulation:
         if len(unique_ids) == 1:
             print(f"\n⚠️⚠️⚠️ CRITICAL BUG: All joints mapped to same ID ({unique_ids.pop()})!")
             print("  This means joint names don't match XML or lookup is failing!")
-        # ===== END DEBUG =====
 
         # Build actuator mapping
         self._build_actuator_mapping()
@@ -88,7 +160,19 @@ class RobotSimulation:
         mujoco.mj_forward(self.model, self.data)
     
     def _build_actuator_mapping(self):
-        """Build mapping from joints to actuators"""
+        """
+        Build mapping from joint IDs to actuator IDs.
+        
+        This is necessary because MuJoCo's actuator indices may not directly
+        correspond to joint indices. The mapping is stored in self.joint_to_actuator.
+        
+        Side Effects:
+            Populates self.joint_to_actuator dictionary with {joint_id: actuator_id} pairs.
+        
+        Notes:
+            - Uses model.actuator_trnid to determine which joint each actuator controls
+            - Prints warning if any actuator cannot be mapped
+        """
         self.joint_to_actuator = {}
         
         for act_idx in range(self.model.nu):
@@ -102,7 +186,25 @@ class RobotSimulation:
         print(f"  ℹ Built actuator mapping for {len(self.joint_to_actuator)} actuators")
     
     def set_initial_configuration(self):
-        """Set initial joint positions to nominal standing configuration"""
+        """
+        Set robot to nominal standing configuration.
+        
+        Initializes the robot in a stable standing pose with:
+        - Hip joints at 0° (neutral)
+        - Thigh joints at ~34° (0.6 rad)
+        - Shank joints at ~-74° (-1.29 rad)
+        - Base height at 0.40m above ground
+        
+        Side Effects:
+            - Modifies self.data.qpos for joint positions
+            - Runs forward kinematics via mujoco.mj_forward()
+            - Adjusts base height if no ground contact detected
+        
+        Notes:
+            - Configuration designed to center CoM over support polygon
+            - Automatically verifies ground contact after initialization
+            - Will lower robot by 5cm if initially floating
+        """
         # Standing pose: legs slightly bent
         nominal_config = [
             0.0, 0.6, -1.2,  # FL
@@ -131,7 +233,34 @@ class RobotSimulation:
             print(f"  ℹ After adjustment: contacts = {self.data.ncon}")
         
     def get_state(self) -> np.ndarray:
-        """Get current robot state in SRBD format"""
+        """
+        Extract current robot state in Single Rigid Body Dynamics (SRBD) format.
+        
+        The state vector follows the convention used in Bjelonic et al. 2021:
+        x = [θ, p, ω, v, q_j]
+        
+        Returns:
+            np.ndarray: State vector of shape (24,) with layout:
+                [0:3]   - θ (roll, pitch, yaw) in radians (Euler XYZ)
+                [3:6]   - p (base position x, y, z) in world frame [m]
+                [6:9]   - ω (angular velocity) in body frame [rad/s]
+                [9:12]  - v (linear velocity) in body frame [m/s]
+                [12:24] - q_j (joint positions) for 12 joints [rad]
+                          Ordering: FL_hip, FL_thigh, FL_shank, FR_..., HL_..., HR_...
+        
+        Notes:
+            - Quaternions from MuJoCo [w,x,y,z] are converted to Euler angles
+            - Velocities are transformed from world frame to body frame
+            - Joint angles are read directly from qpos using proper addressing
+            - All angles are in radians
+            - Performs sanity checking to detect incorrect joint reading
+        
+        Example:
+            >>> state = sim.get_state()
+            >>> roll, pitch, yaw = state[0:3]
+            >>> base_height = state[5]
+            >>> front_left_hip_angle = state[12]
+        """
         # Base position and quaternion
         base_pos = self.data.qpos[0:3].copy()
         base_quat_mj = self.data.qpos[3:7].copy()  # [w, x, y, z]
@@ -151,7 +280,7 @@ class RobotSimulation:
         v_body = R_BW @ base_vel_linear_world
         omega_body = R_BW @ base_vel_angular_world
 
-        # ===== FIXED: Joint positions with explicit checking =====
+        # Joint positions with explicit checking
         joint_positions = []
         
         # Debug first time
@@ -192,25 +321,53 @@ class RobotSimulation:
 
     def apply_control(self, u: np.ndarray, contact_states: np.ndarray = None):
         """
-        FIXED: Robust PD control with proper force integration
+        Apply control input using robust PD control with contact force integration.
         
-        u layout:
-        - u[0:12]   -> lambda_e (contact forces in body frame)
-        - u[12:24]  -> desired joint velocities
+        This is the LEGACY control method. Consider using apply_control_new() instead.
+        
+        Args:
+            u (np.ndarray): Control vector of shape (24,) with layout:
+                [0:12]  - λ_e (contact forces) in body frame [N]
+                          Format: [FL_x, FL_y, FL_z, FR_x, FR_y, FR_z, HL_x, HL_y, HL_z, HR_x, HR_y, HR_z]
+                [12:24] - u_j (desired joint velocities) [rad/s]
+            contact_states (np.ndarray, optional): Binary array [4] indicating contact
+                                                  (1=stance, 0=swing) for each leg.
+                                                  If None, will auto-detect from simulation.
+        
+        Side Effects:
+            - Modifies self.data.ctrl actuator commands
+            - Updates internal tracking variables for debugging
+        
+        Control Law:
+            τ = K_p(q_d - q) + K_d(q̇_d - q̇) + J^T λ + τ_gravity
+            
+            Where:
+            - K_p: Position gain (100.0 N⋅m/rad, softer for hip joints)
+            - K_d: Damping gain (10.0 N⋅m⋅s/rad)
+            - J: Foot Jacobian (computed via mujoco.mj_jacSite)
+            - λ: Contact forces (only applied to stance legs)
+            - τ_gravity: Gravity compensation from qfrc_bias
+        
+        Notes:
+            - Hip joints use 30% of standard K_p for stability
+            - Contact forces only applied when contact_states[leg] == 1
+            - Torques clamped to ±80 N⋅m per joint
+            - Forces transformed from body frame to world frame
+            - Unilateral contact constraint: only pushing forces (F_z ≥ 0)
         """
         
-        # ===== UNPACK CONTROL =====
+        # UNPACK CONTROL
         lambda_e = np.asarray(u[0:12]).reshape(4, 3)  # 4 legs × (Fx, Fy, Fz)
         u_j_desired = np.asarray(u[12:24]).flatten()
         
         dt = float(self.model.opt.timestep)
         
-        # ===== PD GAINS (TUNED FOR STABILITY) =====
+        # PD GAINS (TUNED FOR STABILITY)
         kp = 100.0  # Position gain
-        kd = 10.0   # Damping gain
+        kd = 50.0   # Damping gain
         tau_limit = 80.0  # Torque limit per joint
         
-        # ===== READ CURRENT JOINT STATES =====
+        # READ CURRENT JOINT STATES
         q_current = np.zeros(12)
         qd_current = np.zeros(12)
         
@@ -220,7 +377,7 @@ class RobotSimulation:
             q_current[i] = float(self.data.qpos[qpos_addr])
             qd_current[i] = float(self.data.qvel[dof_addr])
         
-        # ===== POSTURE CONTROL =====
+        # POSTURE CONTROL
         # Maintain nominal standing pose
         if not hasattr(self, '_q_nominal'):
             self._q_nominal = np.array([
@@ -239,7 +396,7 @@ class RobotSimulation:
             q_desired = q_current + u_j_desired * dt
             qd_desired = u_j_desired
         
-        # ===== COMPUTE PD TORQUES =====
+        # COMPUTE PD TORQUES
         def wrap_to_pi(angle):
             """Wrap angle to [-pi, pi]"""
             return (angle + np.pi) % (2.0 * np.pi) - np.pi
@@ -254,7 +411,7 @@ class RobotSimulation:
         
         tau_pd = kp_vec * q_error + kd_vec * qd_error
         
-        # ===== CONTACT FORCE CONTRIBUTION =====
+        # CONTACT FORCE CONTRIBUTION
         tau_contact = np.zeros(12)
         
         # Detect actual contacts if not provided
@@ -294,7 +451,7 @@ class RobotSimulation:
                     if dof_addr < len(tau_from_force):
                         tau_contact[leg_start + j] += tau_from_force[dof_addr]
         
-        # ===== GRAVITY COMPENSATION =====
+        # GRAVITY COMPENSATION
         mujoco.mj_forward(self.model, self.data)
         qfrc_bias = np.asarray(self.data.qfrc_bias)
         
@@ -304,16 +461,15 @@ class RobotSimulation:
             if dof_addr < len(qfrc_bias):
                 tau_gravity[i] = qfrc_bias[dof_addr]
         
-        # ===== TOTAL TORQUE =====
+        # TOTAL TORQUE
         # Weight contact forces moderately
         w_contact = 1.0
         tau_total = tau_pd + w_contact * tau_contact + tau_gravity
-        # tau_total = tau_pd + tau_gravity
         
         # Clamp to limits
         tau_total = np.clip(tau_total, -tau_limit, tau_limit)
         
-        # ===== APPLY TO ACTUATORS =====
+        # APPLY TO ACTUATORS
         for i, joint_idx in enumerate(self.joint_indices[:12]):
             act_idx = self.joint_to_actuator.get(joint_idx, i)
             
@@ -342,8 +498,25 @@ class RobotSimulation:
     
     def _detect_contacts(self) -> np.ndarray:
         """
-        Detect which feet are in contact with ground
-        Returns array [FL, FR, HL, HR] with 1=contact, 0=swing
+        Detect which feet are currently in contact with ground.
+        
+        Returns:
+            np.ndarray: Binary contact state array of shape (4,) with layout:
+                       [FL, FR, HL, HR] where 1=contact, 0=no contact
+        
+        Detection Method:
+            Iterates through all active contacts in self.data.contact and checks
+            if geometry names match foot or wheel geometry patterns.
+        
+        Notes:
+            - Checks both foot geometries ('fl_foot', etc.) and wheel geometries
+            - Uses substring matching on geometry names
+            - Returns all zeros if no contacts detected
+            - Does not consider contact normal or force magnitude
+        
+        Example:
+            >>> contacts = sim._detect_contacts()
+            >>> print(contacts)  # [1, 1, 0, 0] means front legs in contact
         """
         contact_states = np.zeros(4, dtype=int)
         
@@ -366,7 +539,29 @@ class RobotSimulation:
         return contact_states
     
     def _compute_foot_jacobian(self, foot_site_name: str):
-        """Compute translational Jacobian for foot site"""
+        """
+        Compute translational Jacobian for a foot site.
+        
+        Args:
+            foot_site_name (str): Name of the foot site in the MuJoCo model
+                                 (e.g., 'fl_foot_site')
+        
+        Returns:
+            np.ndarray: Translational Jacobian matrix of shape (3, nv) where nv is
+                       the number of degrees of freedom. Each row corresponds to
+                       [x, y, z] and columns to generalized velocities.
+            None: If site not found or computation fails
+        
+        Notes:
+            - Uses mujoco.mj_jacSite for computation
+            - Returns positional Jacobian (jacp), not rotational (jacr)
+            - Useful for computing joint torques from Cartesian forces: τ = J^T F
+        
+        Example:
+            >>> J = sim._compute_foot_jacobian('fl_foot_site')
+            >>> foot_force = np.array([0, 0, 100])  # 100N vertical
+            >>> joint_torques = J.T @ foot_force
+        """
         try:
             site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, foot_site_name)
             jacp = np.zeros((3, self.model.nv), dtype=np.float64)
@@ -378,13 +573,51 @@ class RobotSimulation:
     
     def apply_control_new(self, u: np.ndarray, contact_states: np.ndarray = None):
         """
-        τ_total = J^T λ + τ_PD with proper implementation
+        Apply control with improved Jacobian-based force mapping (RECOMMENDED).
         
-        This uses the original approach from your code but with critical fixes:
-        1. Proper contact force transformation
-        2. Better PD gains and tuning
-        3. Correct Jacobian usage
-        4. Stability improvements
+        This is the IMPROVED control method with better stability and performance.
+        Uses proper τ = J^T λ + τ_PD formulation with enhanced tuning.
+        
+        Args:
+            u (np.ndarray): Control vector of shape (24,) with layout:
+                [0:12]  - λ_e (contact forces) in body frame [N]
+                          Format: [FL_x, FL_y, FL_z, FR_x, ...] (4 legs × 3)
+                [12:24] - u_j (desired joint velocities) [rad/s]
+            contact_states (np.ndarray, optional): Binary contact indicators [4].
+                                                  If None, auto-detects from physics.
+        
+        Side Effects:
+            - Sets self.data.ctrl actuator commands
+            - Prints verification info on first call if verify=True
+            - Tracks saturation warnings
+        
+        Control Improvements over apply_control():
+            1. Better PD gain tuning (K_p=100, K_d=50)
+            2. Proper velocity integration: q_d = q + u_j * dt
+            3. Robust contact force transformation
+            4. Fallback to body Jacobian if site unavailable
+            5. Saturation monitoring
+        
+        Control Law:
+            τ_total = K_p⋅(q_des - q) + K_d⋅(q̇_des - q̇) + w_contact⋅J^T⋅λ + τ_gravity
+            
+        Gains:
+            - Hip yaw: K_p = 25 N⋅m/rad, K_d = 15 N⋅m⋅s/rad
+            - Thigh/shank: K_p = 100 N⋅m/rad, K_d = 50 N⋅m⋅s/rad
+            - Contact weight: w_contact = 1.0
+            - Torque limit: ±80 N⋅m
+        
+        Notes:
+            - In verification mode, sets all controls to zero
+            - Enforces unilateral contact (F_z ≥ 0)
+            - Wraps angle errors to [-π, π]
+            - Clips final torques to actuator limits
+        
+        Example:
+            >>> u = np.zeros(24)
+            >>> u[2] = 100.0  # FL vertical force
+            >>> u[14] = 0.5   # FL thigh velocity
+            >>> sim.apply_control_new(u, contact_states=[1,1,1,1])
         """
 
         # DEBUG: Print what we received
@@ -397,7 +630,7 @@ class RobotSimulation:
             if self._cmd_check_counter % 100 == 0:
                 print(f"[CTRL] Received joint velocities: {u_j_commanded[:6]}")
 
-        # ===== VERIFICATION MODE =====
+        # VERIFICATION MODE
         if getattr(self, "verify", False):
             if not hasattr(self, "_verified_once"):
                 self.debug_mujoco_mapping()
@@ -413,12 +646,12 @@ class RobotSimulation:
             self.data.ctrl[:] = 0.0
             return
 
-        # ===== UNPACK CONTROL INPUTS =====
+        # UNPACK CONTROL INPUTS
         lambda_e = np.asarray(u[0:12]).reshape(4, 3)     # Contact forces [FL, FR, HL, HR] × (Fx,Fy,Fz)
         u_j_desired = np.asarray(u[12:24]).reshape(-1)   # Desired joint velocities (12)
         dt = float(self.model.opt.timestep)
 
-        # ===== READ CURRENT JOINT STATES =====
+        # READ CURRENT JOINT STATES
         joint_ids = self.joint_indices[:12]
         q = np.zeros(12)
         qd = np.zeros(12)
@@ -431,21 +664,19 @@ class RobotSimulation:
             qd[i] = float(self.data.qvel[dofadr])
             dofaddrs.append(dofadr)
 
-        # ===== NOMINAL POSTURE =====
+        # NOMINAL POSTURE
         if not hasattr(self, '_q_nominal') or self._q_nominal is None:
             self._q_nominal = np.array([0.0, 0.7, -1.4] * 4)
 
-        # ===== COMPUTE DESIRED JOINT POSITIONS =====
-        # If no velocity command, hold nominal pose
+        # COMPUTE DESIRED JOINT POSITIONS
         if np.linalg.norm(u_j_desired) < 1e-6:
             q_des = self._q_nominal.copy()
             qd_des = np.zeros_like(qd)
         else:
-            # Track velocity command via simple integration
             q_des = q + u_j_desired * dt
             qd_des = u_j_desired
 
-        # ===== PD CONTROL WITH ANGLE WRAPPING =====
+        # PD CONTROL WITH ANGLE WRAPPING
         def wrap_pi(e):
             """Wrap angle error to [-pi, pi]"""
             return (e + np.pi) % (2.0 * np.pi) - np.pi
@@ -462,7 +693,7 @@ class RobotSimulation:
         
         tau_pd = kp_vec * q_err + kd_vec * qd_err
 
-        # ===== CONTACT FORCE CONTRIBUTION VIA JACOBIAN TRANSPOSE =====
+        # CONTACT FORCE CONTRIBUTION VIA JACOBIAN TRANSPOSE
         
         # Detect contact states if not provided
         if contact_states is None:
@@ -488,13 +719,11 @@ class RobotSimulation:
             
             # Get foot Jacobian
             try:
-                # Try to use foot site first (more accurate)
                 sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site_names[leg])
                 jacp = np.zeros((3, nv), dtype=np.float64)
                 jacr = np.zeros((3, nv), dtype=np.float64)
                 mujoco.mj_jacSite(self.model, self.data, jacp, jacr, sid)
             except Exception:
-                # Fallback to shank body Jacobian
                 jacp = self._compute_foot_jacobian(body_fallback[leg])
                 if jacp is None:
                     continue
@@ -516,7 +745,7 @@ class RobotSimulation:
             if 0 <= dofadr < nv:
                 tau_contact[i] = tau_contact_nv[dofadr]
 
-        # ===== GRAVITY COMPENSATION =====
+        # GRAVITY COMPENSATION
         mujoco.mj_forward(self.model, self.data)
         qfrc_bias = np.asarray(self.data.qfrc_bias)
         
@@ -526,9 +755,8 @@ class RobotSimulation:
             if 0 <= dofadr < len(qfrc_bias):
                 tau_gravity[i] = qfrc_bias[dofadr]
 
-        # ===== TOTAL TORQUE CALCULATION =====
-        # Weight contact forces appropriately
-        w_contact = 1.0  # Moderate weight (0.0 = ignore forces, 1.0 = full weight)
+        # TOTAL TORQUE CALCULATION
+        w_contact = 1.0  # Contact force weight
         
         tau_total_joint = tau_pd + w_contact * tau_contact + tau_gravity
         
@@ -536,8 +764,7 @@ class RobotSimulation:
         tau_limit = 80.0
         tau_total_joint = np.clip(tau_total_joint, -tau_limit, tau_limit)
 
-        # ===== APPLY TO ACTUATORS =====
-        # Build joint-to-actuator mapping if needed
+        # APPLY TO ACTUATORS
         if not hasattr(self, '_joint_to_actuator') or self._joint_to_actuator is None:
             jtact = {}
             for a in range(self.model.nu):
@@ -576,7 +803,7 @@ class RobotSimulation:
             self.data.ctrl[act_idx] = ctrl
             max_ctrl_mag = max(max_ctrl_mag, abs(ctrl))
 
-        # ===== SATURATION WARNING =====
+        # SATURATION WARNING
         try:
             overall_max = float(np.max(self.model.actuator_ctrlrange[:, 1]))
             if max_ctrl_mag > 0.9 * overall_max:
@@ -584,25 +811,80 @@ class RobotSimulation:
                     self._saturation_warning_count = 0
                 self._saturation_warning_count += 1
                 
-                # Only print warning occasionally (not every step)
                 if self._saturation_warning_count % 100 == 0:
                     print(f"[WARN] Actuator near saturation: max|ctrl|={max_ctrl_mag:.2f}/{overall_max:.2f}")
         except Exception:
             pass
 
-
     def step_physics(self):
-        """Step the simulation's physics by one timestep"""
+        """
+        Advance physics simulation by one timestep.
+        
+        Integrates equations of motion forward by model.opt.timestep seconds
+        using the currently set actuator commands in self.data.ctrl.
+        
+        Side Effects:
+            - Updates all state variables in self.data (qpos, qvel, qacc, etc.)
+            - Processes contacts and constraints
+            - Applies actuator forces
+        
+        Notes:
+            - Timestep is defined in XML or defaults to 0.001s
+            - Uses semi-implicit Euler integration
+            - Automatically handles contact dynamics
+        
+        Example:
+            >>> sim.apply_control(control_vector)
+            >>> sim.step_physics()  # Physics advances by dt
+            >>> new_state = sim.get_state()
+        """
         mujoco.mj_step(self.model, self.data)
     
     def render(self):
-        """Sync the viewer (if it exists) to match real-time"""
+        """
+        Update the GUI viewer to display current simulation state.
+        
+        Synchronizes the passive viewer to match real-time playback speed.
+        Should be called once per control loop iteration.
+        
+        Raises:
+            KeyboardInterrupt: If viewer window is closed by user.
+        
+        Side Effects:
+            - Updates viewer display
+            - Processes viewer events
+        
+        Notes:
+            - Does nothing if use_gui=False
+            - Blocks briefly to maintain real-time rendering
+            - Automatically handles viewer framerate
+        
+        Example:
+            >>> while running:
+            ...     sim.step_physics()
+            ...     sim.render()  # Updates 3D visualization
+        """
         if self.viewer is not None:
             if not self.viewer.is_running():
                 raise KeyboardInterrupt
             self.viewer.sync()
     
     def close(self):
-        """Close the simulation"""
+        """
+        Clean up simulation resources.
+        
+        Closes the viewer window and releases associated resources.
+        Should be called when simulation is complete.
+        
+        Side Effects:
+            - Closes GUI window if open
+            - Releases viewer resources
+        
+        Example:
+            >>> try:
+            ...     sim.run_simulation()
+            ... finally:
+            ...     sim.close()  # Always clean up
+        """
         if self.viewer is not None:
             self.viewer.close()

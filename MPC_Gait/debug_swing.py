@@ -6,6 +6,71 @@ Add this to your main.py
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+def debug_gait_pattern(step, t, x_current, contact_states, dynamics):
+    """
+    FIXED: Properly computes foot positions in WORLD frame
+    """
+    if step % 50 != 0:  # 1 Hz at 50Hz control
+        return
+
+    theta = x_current[0:3]        # roll, pitch, yaw
+    p_base = x_current[3:6]       # base position in world
+    q_j = x_current[12:24]        # joint angles
+
+    # Compute body-to-world rotation
+    R_WB = Rotation.from_euler('xyz', theta).as_matrix()
+
+    # Get contact positions in BODY frame (relative to COM)
+    contact_points_B = dynamics.compute_contact_positions(q_j, theta)
+
+    # Convert to WORLD frame
+    foot_z_world = []
+    foot_world_coords = []
+    for fp_B in contact_points_B:
+        # Transform: p_foot_world = p_base + R_WB @ p_foot_body
+        foot_W = p_base + R_WB @ fp_B
+        foot_world_coords.append(foot_W)
+        foot_z_world.append(foot_W[2])
+
+    # Format contact states
+    contact_str = ''.join(['█' if c else '░' for c in contact_states])
+
+    # Diagonal pattern checks
+    fl, fr, hl, hr = contact_states
+    fl_rh_sync = (fl == hr)
+    fr_hl_sync = (fr == hl)
+    diagonals_opposite = (fl != fr)
+    pattern_ok = fl_rh_sync and fr_hl_sync and diagonals_opposite
+
+    # Print analysis
+    print(f"\n[DEBUG t={t:.2f}s] Gait Analysis:")
+    print(f"  Contacts: {contact_str} | FL:{fl} FR:{fr} HL:{hl} HR:{hr}")
+    print(f"  Pattern: {'✓ OK' if pattern_ok else '✗ WRONG'} | "
+          f"FL+RH:{fl_rh_sync} FR+HL:{fr_hl_sync} Opp:{diagonals_opposite}")
+    
+    # WORLD frame heights (FIXED!)
+    print(f"  Foot Z (world): FL={foot_z_world[0]:.3f} FR={foot_z_world[1]:.3f} "
+          f"HL={foot_z_world[2]:.3f} HR={foot_z_world[3]:.3f}")
+    
+    # BODY frame heights (for reference)
+    body_z = [fp[2] for fp in contact_points_B]
+    print(f"  Foot Z (body):  FL={body_z[0]:.3f} FR={body_z[1]:.3f} "
+          f"HL={body_z[2]:.3f} HR={body_z[3]:.3f}")
+
+    # Check swing clearance
+    ground_level = 0.0
+    for leg_idx, name in enumerate(['FL', 'FR', 'HL', 'HR']):
+        if contact_states[leg_idx] == 0:  # Swing leg
+            height_above_ground = foot_z_world[leg_idx] - ground_level
+            if height_above_ground < 0.03:  # Should be >3cm
+                print(f"    ⚠️ {name} in swing but only {height_above_ground*100:.1f}cm above ground!")
+            else:
+                print(f"    ✓ {name} swing clearance: {height_above_ground*100:.1f}cm")
+
+    print(f"  Base: x={p_base[0]:.3f} y={p_base[1]:.3f} z={p_base[2]:.3f}")
+    print(f"  Base orientation: roll={np.rad2deg(theta[0]):.1f}° "
+          f"pitch={np.rad2deg(theta[1]):.1f}° yaw={np.rad2deg(theta[2]):.1f}°")
+    
 def debug_swing_detailed(step, t, x_current, contact_states, dynamics, controller):
     """
     Detailed swing trajectory analysis

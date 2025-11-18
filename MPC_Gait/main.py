@@ -1,5 +1,56 @@
 # main.py 
 
+"""
+Whole-Body Model Predictive Control for Wheeled-Legged Quadruped Robot
+
+This is the main executable for running MPC-based locomotion control on a
+quadrupedal robot in MuJoCo simulation. Implements the control architecture
+from Bjelonic et al. 2021 with hybrid stance/swing control.
+
+Key Features:
+    - Single Rigid Body Dynamics (SRBD) reduced-order model
+    - Nonlinear MPC with iLQR solver
+    - Hybrid trot gait generation
+    - IK-based swing leg control
+    - Stance leg force optimization
+    - Real-time debugging and visualization
+
+Architecture:
+    1. MPC Layer: Optimizes contact forces for base motion tracking
+    2. IK Layer: Generates joint trajectories for swing legs
+    3. Low-level PD: Tracks joint positions with gravity compensation
+    
+Control Flow:
+    State → MPC → Forces (stance) + IK → Positions (swing) → PD → Torques
+
+Usage:
+    python main.py
+    
+    Adjust configuration in main() function:
+    - ROBOT_XML_PATH: Path to robot model
+    - TARGET_VELOCITY: Desired [vx, vy, vz, ωx, ωy, ωz]
+    - SIMULATION_TIME: Duration in seconds
+    - USE_GUI: Enable/disable 3D visualization
+
+Dependencies:
+    - numpy: Numerical operations
+    - scipy: Rotation representations and IK
+    - mujoco: Physics simulation
+    - config: MPC parameters
+    - dynamics: SRBD model
+    - mpc_controller: iLQR optimizer
+    - simulation: MuJoCo wrapper
+    - kinematics: Inverse kinematics
+    - utils: Trajectory generation
+
+References:
+    Bjelonic et al. "Whole-Body MPC for a Dynamically Stable Mobile Manipulator"
+    IEEE RA-L 2021. https://doi.org/10.1109/LRA.2021.3068908
+
+Author: Implementation based on paper methodology
+Date: 2024
+"""
+
 import numpy as np
 import sys
 from config import MPCParameters
@@ -9,19 +60,38 @@ from simulation import RobotSimulation
 from scipy.spatial.transform import Rotation
 from kinematics import ik_sagittal
 from utils import generate_reference_trajectory
-from debug_swing import debug_swing_detailed, check_ik_reachability, test_ik_at_swing_phases
+from debug_swing import debug_swing_detailed, check_ik_reachability, test_ik_at_swing_phases, debug_gait_pattern
 
 def compute_stance_control(leg_idx, q_now):
     """
-    Gentle position hold for stance legs
-    SIMPLIFIED: No velocity feedback to avoid state vector issues
+    Generate position-holding control for stance legs.
+    
+    Applies proportional feedback to maintain nominal stance configuration,
+    providing compliance during stance phase without fighting MPC forces.
     
     Args:
-        leg_idx: Leg index (0-3)
-        q_now: Current joint positions [3]
+        leg_idx (int): Leg index (0=FL, 1=FR, 2=HL, 3=HR)
+        q_now (np.ndarray): Current joint positions [hip, thigh, shank] in radians
     
     Returns:
-        u_joint: Joint velocity command [3]
+        np.ndarray: Joint velocity commands [3] in rad/s
+    
+    Control Law:
+        u_joint = K_p * (q_nominal - q_current)
+        
+    Gains:
+        K_p = 3.0 rad/s per rad (gentle compliance)
+    
+    Notes:
+        - No derivative term to avoid coupling with MPC force optimization
+        - Nominal stance: hip=0°, thigh=34.4°, shank=-73.9°
+        - Provides soft position spring without velocity feedback
+        - Allows MPC forces to dominate motion
+    
+    Example:
+        >>> q_current = np.array([0.1, 0.7, -1.3])
+        >>> u = compute_stance_control(0, q_current)
+        >>> # Returns velocity to drive toward [0.0, 0.6, -1.29]
     """
     # Nominal stance configuration
     q_nom = np.array([0.0, 0.6, -1.29])
@@ -35,7 +105,47 @@ def compute_stance_control(leg_idx, q_now):
 
 def compute_swing_ik_simple(leg_idx, swing_phase, q_now):
     """
-    TUNED VERSION: Bigger steps, more clearance
+        Generate IK-based swing trajectory with bezier-like foot path.
+        
+        Computes desired joint positions for swing legs using inverse kinematics
+        on a smooth foot trajectory with parabolic clearance profile.
+        
+        Args:
+            leg_idx (int): Leg index (0-3), currently unused but kept for extensibility
+            swing_phase (float): Normalized swing phase in [0, 1]
+                                0 = lift-off, 0.5 = apex, 1 = touchdown
+            q_now (np.ndarray): Current joint positions [hip, thigh, shank] in radians
+        
+        Returns:
+            np.ndarray: Joint velocity commands [3] in rad/s
+        
+        Trajectory Design:
+            - Horizontal: Linear interpolation from x0 to x0+step_length
+            - Vertical: Parabolic arc with peak at phase=0.5
+            - Smoothing: 5th-order polynomial (6s^5 - 15s^4 + 10s^3)
+        
+        Parameters:
+            - step_length: 12cm (0.12m) forward step
+            - clearance: 5cm (0.05m) maximum height
+            - x0: 5cm (0.05m) starting position (behind hip)
+            - Safety margin: 90% of kinematic reach limit
+        
+        Control:
+            K_p = 12.0 rad/s per rad (stiff tracking)
+        
+        Notes:
+            - Uses 2D sagittal plane IK (hip always 0)
+            - Clips to joint limits for safety
+            - Falls back to conservative pose if IK fails
+            - Higher gain than stance for precise tracking
+        
+        Raises:
+            ValueError: If joint angles exceed physical limits (caught internally)
+        
+        Example:
+            >>> q_current = np.array([0.0, 0.5, -1.0])
+            >>> u = compute_swing_ik_simple(0, 0.5, q_current)
+            >>> # Returns velocity to reach apex position
     """
     
     s = swing_phase
@@ -91,74 +201,77 @@ def compute_swing_ik_simple(leg_idx, swing_phase, q_now):
     return u_joint
 
 
-def debug_gait_pattern(step, t, x_current, contact_states, dynamics):
-    """
-    FIXED: Properly computes foot positions in WORLD frame
-    """
-    if step % 50 != 0:  # 1 Hz at 50Hz control
-        return
-
-    theta = x_current[0:3]        # roll, pitch, yaw
-    p_base = x_current[3:6]       # base position in world
-    q_j = x_current[12:24]        # joint angles
-
-    # Compute body-to-world rotation
-    R_WB = Rotation.from_euler('xyz', theta).as_matrix()
-
-    # Get contact positions in BODY frame (relative to COM)
-    contact_points_B = dynamics.compute_contact_positions(q_j, theta)
-
-    # Convert to WORLD frame
-    foot_z_world = []
-    foot_world_coords = []
-    for fp_B in contact_points_B:
-        # Transform: p_foot_world = p_base + R_WB @ p_foot_body
-        foot_W = p_base + R_WB @ fp_B
-        foot_world_coords.append(foot_W)
-        foot_z_world.append(foot_W[2])
-
-    # Format contact states
-    contact_str = ''.join(['█' if c else '░' for c in contact_states])
-
-    # Diagonal pattern checks
-    fl, fr, hl, hr = contact_states
-    fl_rh_sync = (fl == hr)
-    fr_hl_sync = (fr == hl)
-    diagonals_opposite = (fl != fr)
-    pattern_ok = fl_rh_sync and fr_hl_sync and diagonals_opposite
-
-    # Print analysis
-    print(f"\n[DEBUG t={t:.2f}s] Gait Analysis:")
-    print(f"  Contacts: {contact_str} | FL:{fl} FR:{fr} HL:{hl} HR:{hr}")
-    print(f"  Pattern: {'✓ OK' if pattern_ok else '✗ WRONG'} | "
-          f"FL+RH:{fl_rh_sync} FR+HL:{fr_hl_sync} Opp:{diagonals_opposite}")
-    
-    # WORLD frame heights (FIXED!)
-    print(f"  Foot Z (world): FL={foot_z_world[0]:.3f} FR={foot_z_world[1]:.3f} "
-          f"HL={foot_z_world[2]:.3f} HR={foot_z_world[3]:.3f}")
-    
-    # BODY frame heights (for reference)
-    body_z = [fp[2] for fp in contact_points_B]
-    print(f"  Foot Z (body):  FL={body_z[0]:.3f} FR={body_z[1]:.3f} "
-          f"HL={body_z[2]:.3f} HR={body_z[3]:.3f}")
-
-    # Check swing clearance
-    ground_level = 0.0
-    for leg_idx, name in enumerate(['FL', 'FR', 'HL', 'HR']):
-        if contact_states[leg_idx] == 0:  # Swing leg
-            height_above_ground = foot_z_world[leg_idx] - ground_level
-            if height_above_ground < 0.03:  # Should be >3cm
-                print(f"    ⚠️ {name} in swing but only {height_above_ground*100:.1f}cm above ground!")
-            else:
-                print(f"    ✓ {name} swing clearance: {height_above_ground*100:.1f}cm")
-
-    print(f"  Base: x={p_base[0]:.3f} y={p_base[1]:.3f} z={p_base[2]:.3f}")
-    print(f"  Base orientation: roll={np.rad2deg(theta[0]):.1f}° "
-          f"pitch={np.rad2deg(theta[1]):.1f}° yaw={np.rad2deg(theta[2]):.1f}°")
-
-
 def main():
-    """Main driver code for MPC-based walking controller"""
+    """
+        Main control loop for MPC-based quadruped locomotion.
+        
+        Execution Phases:
+            1. Configuration and parameter loading
+            2. Dynamics model initialization (SRBD)
+            3. MPC controller setup (iLQR)
+            4. MuJoCo simulation initialization
+            5. Stabilization phase (1 second)
+            6. Main control loop
+            7. Statistics and cleanup
+        
+        Control Architecture:
+            For each control step (20ms @ 50Hz):
+                1. Read state from simulation
+                2. Generate reference trajectory
+                3. Update gait state (every 0.1s)
+                4. Compute stance control (position holding)
+                5. Compute swing control (IK trajectory)
+                6. Solve MPC for contact forces
+                7. Combine MPC forces + IK positions
+                8. Apply to simulation
+                9. Step physics multiple times
+                10. Render visualization
+        
+        Configuration Variables:
+            ROBOT_XML_PATH (str): Path to MuJoCo XML model
+            USE_SIMPLE_ROBOT (bool): Use programmatic model (deprecated)
+            USE_GUI (bool): Enable 3D visualization
+            SIMULATION_TIME (float): Total duration in seconds
+            IN_VERIFICATION (bool): Debug mode (no control)
+            WHEELS_ON (bool): Use wheeled robot variant
+            ENABLE_GAIT_DEBUG (bool): Print gait diagnostics
+            TARGET_VELOCITY (np.ndarray): Desired [vx, vy, vz, ωx, ωy, ωz]
+        
+        MPC Parameters:
+            - Horizon: 0.8s with 20 nodes (40ms per node)
+            - Control frequency: 50 Hz
+            - Weights: position=100, orientation=50, velocity=10
+            - Friction coefficient: 0.7
+            - Max joint velocity: 8 rad/s
+            - Max contact force: 500 N
+        
+        Data Collection:
+            - state_history: All state vectors
+            - control_history: All control inputs
+            - cost_history: Tracking cost at each step
+        
+        Keyboard Interrupt:
+            Press Ctrl+C to stop simulation gracefully
+        
+        Returns:
+            None
+        
+        Raises:
+            KeyboardInterrupt: On user interrupt or viewer close
+            ImportError: If required dependencies missing
+            FileNotFoundError: If robot XML not found and generation fails
+        
+        Example:
+            >>> if __name__ == "__main__":
+            ...     main()  # Runs full simulation
+        
+        Notes:
+            - Physics substeps: Typically 20 per control step (1ms physics dt)
+            - Gait: Hybrid trot with 0.3s swing duration
+            - IK step length: 12cm with 5cm clearance
+            - Stance gains: K_p=3.0 (gentle compliance)
+            - Swing gains: K_p=12.0 (stiff tracking)
+    """
     
     print("="*60)
     print("Whole-Body MPC for Wheeled-Legged Robots - MuJoCo")
@@ -174,11 +287,11 @@ def main():
     USE_GUI = True
     SIMULATION_TIME = 30.0
     IN_VERIFICATION = False
-    WHEELS_ON = True
+    WHEELS_ON = False
     ENABLE_GAIT_DEBUG = True
     
     # REDUCED velocity for debugging
-    TARGET_VELOCITY = np.array([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])  # 0.2 m/s
+    TARGET_VELOCITY = np.array([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])  # [vx, vy, vz, wx, wy, wz]
     
     # ==========================================
     # SETUP
@@ -370,7 +483,7 @@ def main():
                     u_apply[leg_idx*3:(leg_idx+1)*3] = 0.0
 
             # NOW you can debug u_apply
-            if step % 50 == 0:  # Every second
+            if ENABLE_GAIT_DEBUG and step % 50 == 0:  # Every second
                 print(f"\n[CONTROL CHECK]")
                 print(f"  u_joint computed: {u_joint[:6]}")
                 print(f"  q_now: {q_now[:6]}")

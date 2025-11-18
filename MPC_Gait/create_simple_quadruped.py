@@ -1,7 +1,7 @@
 
 
 def create_simple_quadruped_xml():
-    """Create a simple quadruped robot XML"""
+    """Create a simple quadruped robot XML - with or without passive wheels"""
     
     xml = """
     <mujoco model="simple_quadruped">

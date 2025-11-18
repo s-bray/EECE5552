@@ -1,6 +1,6 @@
 """
 Debug script to verify gait patterns and foot trajectories
-This simulates the MPC rollout and checks if diagonal legs are alternating correctly
+This simulates the MPC rollout and checks if diagonal legs are alternating correctly by plotting results
 """
 
 import numpy as np

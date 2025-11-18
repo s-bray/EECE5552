@@ -1,4 +1,19 @@
-# mpc_controller.py
+"""
+Model Predictive Controller (MPC) for whole-body motion planning.
+
+This module defines the `MPCController`, which operates on a reduced-order
+Single Rigid Body Dynamics (SRBD) model of the quadruped. Given a reference
+state trajectory and a contact schedule from the gait generator, it produces
+a sequence of control inputs consisting of:
+
+  * contact forces at the feet (lambda_e), and
+  * joint-level "regularization" velocities (u_j),
+
+which are later combined with swing/stance leg controllers in `main.py` and
+applied to the full MuJoCo model. The MPC here is relatively simple: it uses
+a handcrafted policy inside a rollout loop, rather than solving a full QP,
+but it still enforces costs and physical constraints in an MPC-like fashion.
+"""
 
 import numpy as np
 from typing import Tuple
@@ -8,9 +23,39 @@ from dynamics import SingleRigidBodyDynamics
 from gait_generator import GaitSequenceGenerator
 
 class MPCController:
-    """Model Predictive Controller for whole-body motion planning"""
+    """
+    Lightweight whole-body MPC controller built on top of SRBD dynamics.
+
+    This controller:
+      * Holds a reference to the reduced-order SRBD model (`SingleRigidBodyDynamics`)
+        and MPC weights/parameters (`MPCParameters`).
+      * Owns a `GaitSequenceGenerator` instance that produces contact schedules
+        and swing phases (used elsewhere by IK and control).
+      * Provides:
+          - `compute_cost`: quadratic cost function for states and controls,
+          - `enforce_constraints`: projection of controls into physically valid
+            regions (friction cone, force limits, joint velocity limits),
+          - `solve_mpc`: a rollout-based MPC routine that generates a sequence of
+            contact forces and joint regularization commands over the prediction
+            horizon.
+
+    In this implementation, `solve_mpc` does not solve a full optimization
+    problem; instead, it uses a structured policy (mg split + horizontal push)
+    and iteratively refines forces based on velocity tracking error, while
+    always enforcing constraints.
+    """
     
     def __init__(self, dynamics: SingleRigidBodyDynamics, params: MPCParameters):
+        """
+        Initialize the MPC controller with a dynamics model and parameters.
+
+        Args:
+            dynamics (SingleRigidBodyDynamics): Reduced-order SRBD model used
+                                                for forward simulation and
+                                                gravity computations.
+            params (MPCParameters): Container of MPC weights, limits, and
+                                    horizon settings.
+        """
         self.dynamics = dynamics
         self.params = params
         self.gait_gen = GaitSequenceGenerator(params)
@@ -19,8 +64,25 @@ class MPCController:
         self.control_dim = 24   # 12 contact forces + 12 joint velocities
         
     def compute_cost(self, x: np.ndarray, u: np.ndarray, 
-                    x_ref: np.ndarray, u_ref: np.ndarray) -> float:
-        """Quadratic cost function"""
+                     x_ref: np.ndarray, u_ref: np.ndarray) -> float:
+        """
+        Compute a quadratic cost for a single state-control pair.
+
+        The cost penalizes deviations from a reference state and reference
+        control, weighted by the fields in `MPCParameters`. It separates
+        errors into orientation, position, angular velocity, linear velocity,
+        and joint positions for the state, and into contact forces and joint
+        velocities for the control.
+
+        Args:
+            x (np.ndarray): Current state vector, shape (24,).
+            u (np.ndarray): Current control vector, shape (24,).
+            x_ref (np.ndarray): Reference state vector, shape (24,).
+            u_ref (np.ndarray): Reference control vector, shape (24,).
+
+        Returns:
+            float: Scalar cost value for this (x, u) pair.
+        """
         x_error = x - x_ref
         
         theta_err = x_error[0:3]
@@ -49,7 +111,28 @@ class MPCController:
         return 0.5 * (cost_state + cost_control)
     
     def enforce_constraints(self, u: np.ndarray, contact_states: np.ndarray) -> np.ndarray:
-        """Enforce physical constraints on control inputs"""
+        """
+        Project the control input into the set of physically valid inputs.
+
+        This method applies the following constraints:
+          * For stance legs: enforce unilateral contact in the normal direction
+            (no negative Fz), and restrict tangential forces to lie inside a
+            Coulomb friction cone (|Ft| <= μ * Fn).
+          * Limit the total magnitude of each leg's contact force.
+          * For swing legs: zero out contact forces entirely.
+          * Clip joint velocity commands to their maximum allowed magnitude.
+
+        Args:
+            u (np.ndarray): Raw control vector, shape (24,), containing
+                            [lambda_e(0:12), u_j(12:24)].
+            contact_states (np.ndarray): Per-leg stance/swing flags, shape (4,),
+                                         where 1 = stance, 0 = swing.
+
+        Returns:
+            np.ndarray: Constrained control vector of the same shape, guaranteed
+                        to satisfy friction, normal-force, and joint-limit
+                        constraints.
+        """
         u_constrained = u.copy()
         lambda_e = u_constrained[0:12].reshape(4, 3)
         u_j = u_constrained[12:24]
@@ -57,8 +140,10 @@ class MPCController:
         for i in range(4):
             if contact_states[i] == 1:
                 force = lambda_e[i]
+                # Enforce non-negative normal force (no pulling on the ground)
                 force[2] = max(0.0, force[2])
                 
+                # Enforce friction cone on tangential forces
                 f_tangent = np.linalg.norm(force[0:2])
                 f_normal = force[2]
                 
@@ -66,14 +151,17 @@ class MPCController:
                     scale = self.params.friction_coeff * f_normal / (f_tangent + 1e-6)
                     force[0:2] *= scale
                 
+                # Enforce max contact force magnitude
                 force_mag = np.linalg.norm(force)
                 if force_mag > self.params.max_contact_force:
                     force *= self.params.max_contact_force / force_mag
                 
                 lambda_e[i] = force
             else:
+                # No forces for swing legs
                 lambda_e[i] = 0.0
         
+        # Joint velocity limits
         u_j = np.clip(u_j, -self.params.max_joint_velocity, self.params.max_joint_velocity)
         
         u_constrained[0:12] = lambda_e.flatten()
@@ -82,21 +170,45 @@ class MPCController:
         return u_constrained
     
     def solve_mpc(self, x0: np.ndarray, x_ref_traj: np.ndarray,
-                contact_schedule: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                  contact_schedule: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Simple stance-aware MPC rollout that:
-        1) supports body weight by splitting mg across stance legs,
-        2) adds a horizontal push toward the body velocity reference,
-        3) enforces friction cone & limits before integrating SRBD.
+        Generate a stance-aware control sequence over the MPC horizon.
+
+        This routine performs a forward rollout over the SRBD dynamics for
+        `num_nodes` steps, constructing a control policy that:
+
+          1. Supports the body weight by splitting the required normal force
+             (mg in the body frame) across the stance legs at each node.
+
+          2. Adds a horizontal push term (Fx, Fy) per stance leg that attempts
+             to reduce the tracking error between the current and reference
+             body-frame linear velocity (v_ref - v).
+
+          3. Applies a small joint-position regularization term to keep the
+             joint angles close to their reference values, unless they are
+             overridden downstream by swing/stance IK in `main.py`.
+
+          4. Enforces physical constraints (friction cone, force limits, joint
+             velocity limits) at each step via `enforce_constraints`.
+
+        The update is iterated a few times (`max_iterations`) to refine the
+        horizontal force components using the predicted velocity error at the
+        next time step.
 
         Args:
-            x0:            current state (24,)
-            x_ref_traj:    reference state trajectory (N,24)
-            contact_schedule: contact flags per node (N,4) with 1=stance, 0=swing
+            x0 (np.ndarray): Current state vector, shape (24,).
+            x_ref_traj (np.ndarray): Reference state trajectory over the horizon,
+                                     shape (N, 24), where N = `params.num_nodes`.
+            contact_schedule (np.ndarray): Contact flags over the horizon,
+                                           shape (N, 4), where each row is
+                                           [FL, FR, HL, HR] with 1=stance, 0=swing.
 
         Returns:
-            u_seq:  control sequence (N,24)  [lambda_e(12), u_j(12)]
-            x_traj: predicted state rollout (N,24)
+            Tuple[np.ndarray, np.ndarray]:
+                - u_seq: Control sequence of shape (N, 24), where each row is
+                         [lambda_e(12), u_j(12)].
+                - x_traj: Predicted state trajectory of shape (N, 24) obtained
+                          by integrating the SRBD dynamics with u_seq.
         """
         N = self.params.num_nodes
         dt = self.params.dt
