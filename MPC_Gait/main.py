@@ -97,7 +97,7 @@ def compute_stance_control(leg_idx, q_now):
     q_nom = np.array([0.0, 0.6, -1.29])
     
     # Simple proportional control (no derivative term)
-    kp_stance = 3.0
+    kp_stance = 10.0
     
     u_joint = kp_stance * (q_nom - q_now)
     
@@ -287,8 +287,8 @@ def main():
     USE_GUI = True
     SIMULATION_TIME = 30.0
     IN_VERIFICATION = False
-    WHEELS_ON = False
-    ENABLE_GAIT_DEBUG = True
+    WHEELS_ON = True
+    ENABLE_GAIT_DEBUG = False
     
     # REDUCED velocity for debugging
     TARGET_VELOCITY = np.array([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])  # [vx, vy, vz, wx, wy, wz]
@@ -421,7 +421,7 @@ def main():
     cost_history = []
     
     current_contact_states = np.ones(4)
-    controller.gait_gen.set_gait_mode('hybrid_trot')
+    controller.gait_gen.set_gait_mode('hybrid_walk')
 
     try:
         for step in range(num_steps):
@@ -497,6 +497,14 @@ def main():
             # Apply control and step physics
             for _ in range(num_sim_steps_per_control):
                 sim.apply_control_new(u_apply, current_contact_states)
+                # Apply adaptive thrusters if in wheeled mode
+                if WHEELS_ON:
+                    # Adaptive thrust based on gait state
+                    sim.apply_adaptive_thruster_forces(
+                        contact_states=current_contact_states,
+                        base_thrust_ratio=0.0,   # 50% base support
+                        swing_boost=0.3          # +30% per swinging leg
+                    )
                 sim.step_physics()
             sim.render()
 

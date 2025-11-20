@@ -142,7 +142,13 @@ def create_simple_quadruped_xml_wheels():
                     <freejoint/>
                     <geom name="torso" type="box" size="0.3 0.15 0.08" mass="18.0" rgba="0.2 0.2 0.8 1"/>
                     <geom name="torso_imu" type="sphere" size="0.02" pos="0 0 0" mass="0.1" rgba="1 0 0 1"/>
-
+                    
+                    <!-- Thruster sites at four corners of torso (quadcopter style) -->
+                    <site name="fl_thruster_site" pos="0.25 0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                    <site name="fr_thruster_site" pos="0.25 -0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                    <site name="hl_thruster_site" pos="-0.25 0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                    <site name="hr_thruster_site" pos="-0.25 -0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                    
                     <!-- ===== FRONT LEFT ===== -->
                     <body name="fl_hip" pos="0.27 0.17 -0.08">
                         <joint name="fl_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
@@ -158,11 +164,11 @@ def create_simple_quadruped_xml_wheels():
 
                                 <!-- FORWARD-ONLY WHEEL with one-way clutch simulation -->
                                 <body name="fl_wheel" pos="0 0 -0.22">
-                                    <!-- Limited range prevents backward rotation -->
+                                    <!-- Limited range prevents backward rotation (RATCHET MECHANISM) -->
                                     <joint name="fl_wheel_joint" type="hinge" axis="0 1 0" 
                                         range="0 1000" 
-                                        damping="0.1" 
-                                        frictionloss="0.05"/>
+                                        damping="0.5" 
+                                        frictionloss="0.2"/>
                                     
                                     <geom name="fl_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
@@ -186,10 +192,11 @@ def create_simple_quadruped_xml_wheels():
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
                                 <body name="fr_wheel" pos="0 0 -0.22">
+                                    <!-- Limited range prevents backward rotation (RATCHET MECHANISM) -->
                                     <joint name="fr_wheel_joint" type="hinge" axis="0 1 0" 
                                         range="0 1000" 
-                                        damping="0.1" 
-                                        frictionloss="0.05"/>
+                                        damping="0.5" 
+                                        frictionloss="0.2"/>
                                     
                                     <geom name="fr_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
@@ -213,10 +220,11 @@ def create_simple_quadruped_xml_wheels():
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
                                 <body name="hl_wheel" pos="0 0 -0.22">
+                                    <!-- Limited range prevents backward rotation (RATCHET MECHANISM) -->
                                     <joint name="hl_wheel_joint" type="hinge" axis="0 1 0" 
                                         range="0 1000" 
-                                        damping="0.1" 
-                                        frictionloss="0.05"/>
+                                        damping="0.5" 
+                                        frictionloss="0.2"/>
                                     
                                     <geom name="hl_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
@@ -240,10 +248,11 @@ def create_simple_quadruped_xml_wheels():
                                 <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
 
                                 <body name="hr_wheel" pos="0 0 -0.22">
+                                    <!-- Limited range prevents backward rotation (RATCHET MECHANISM) -->
                                     <joint name="hr_wheel_joint" type="hinge" axis="0 1 0" 
                                         range="0 1000" 
-                                        damping="0.1" 
-                                        frictionloss="0.05"/>
+                                        damping="0.5" 
+                                        frictionloss="0.2"/>
                                     
                                     <geom name="hr_wheel_geom" type="cylinder" size="0.03 0.015"
                                         euler="1.5708 0 0" rgba="0.1 0.1 0.1 1"
@@ -278,6 +287,12 @@ def create_simple_quadruped_xml_wheels():
                 <motor name="fr_wheel_motor" joint="fr_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
                 <motor name="hl_wheel_motor" joint="hl_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
                 <motor name="hr_wheel_motor" joint="hr_wheel_joint" gear="5" ctrllimited="true" ctrlrange="0 10"/>
+                
+                <!-- Thruster actuators (apply vertical forces at hip sites) -->
+                <general name="fl_thruster" site="fl_thruster_site" gear="0 0 1 0 0 0" ctrllimited="true" ctrlrange="0 100" dyntype="none" gaintype="fixed" biastype="none"/>
+                <general name="fr_thruster" site="fr_thruster_site" gear="0 0 1 0 0 0" ctrllimited="true" ctrlrange="0 100" dyntype="none" gaintype="fixed" biastype="none"/>
+                <general name="hl_thruster" site="hl_thruster_site" gear="0 0 1 0 0 0" ctrllimited="true" ctrlrange="0 100" dyntype="none" gaintype="fixed" biastype="none"/>
+                <general name="hr_thruster" site="hr_thruster_site" gear="0 0 1 0 0 0" ctrllimited="true" ctrlrange="0 100" dyntype="none" gaintype="fixed" biastype="none"/>
             </actuator>
         </mujoco>
 
