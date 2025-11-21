@@ -8,7 +8,7 @@ class MPCParameters:
     """Configuration parameters for the MPC controller"""
     
     # Robot physical parameters
-    robot_mass: float = 30.0  # kg
+    robot_mass: float = 15.0  # kg
     robot_inertia: np.ndarray = None  # Will be computed from XML
     
     # MPC horizon parameters

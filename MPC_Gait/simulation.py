@@ -864,14 +864,14 @@ class RobotSimulation:
         w_z = self.data.qvel[5]
 
         # 2. PID Gains (Tuned for 32kg robot)
-        kp_roll = 800.0
-        kd_roll = 50.0
+        kp_roll = 100.0
+        kd_roll = 10.0
         
-        kp_pitch = 800.0
-        kd_pitch = 50.0
+        kp_pitch = 100.0
+        kd_pitch = 10.0
         
-        kp_yaw = 800.0
-        kd_yaw = 50.0
+        kp_yaw = 100.0
+        kd_yaw = 10.0
 
         # 3. Compute Control Efforts
         # Targets are 0.0 (stabilize to flat)
