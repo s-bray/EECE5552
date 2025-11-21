@@ -502,7 +502,7 @@ def main():
                     # Adaptive thrust based on gait state
                     sim.apply_adaptive_thruster_forces(
                         contact_states=current_contact_states,
-                        base_thrust_ratio=0.0,   # 50% base support
+                        base_thrust_ratio=0.5,   # 50% base support
                         swing_boost=0.3          # +30% per swinging leg
                     )
                 sim.step_physics()

@@ -1,0 +1,150 @@
+
+    <mujoco model="quadruped_with_thrusters">
+        <compiler angle="degree" coordinate="local" inertiafromgeom="true"/>
+        
+        <option timestep="0.001" iterations="50" solver="Newton" tolerance="1e-10"/>
+        
+        <default>
+            <joint damping="0.5" armature="0.01"/>
+            <geom contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+        </default>
+        
+        <asset>
+            <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+            <texture name="texplane" type="2d" builtin="checker" rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2" width="512" height="512" mark="cross" markrgb="0.8 0.8 0.8"/>
+            <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="1 1" texuniform="true"/>
+        </asset>
+        
+        <worldbody>
+            <geom name="floor" pos="0 0 0" size="0 0 0.05" type="plane" material="matplane" condim="3"/>
+            <light directional="true" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1" pos="0 0 5.0" dir="0 0 -1" castshadow="false"/>
+            <light directional="true" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2" pos="0 0 4" dir="0 0 -1"/>
+            
+            <!-- ===== MAIN BODY (TORSO) ===== -->
+            <body name="torso" pos="0 0 0.5">
+                <freejoint name="joint_0"/>
+                <inertial pos="0 0 0" mass="5.0" diaginertia="0.1 0.1 0.05"/>
+                <geom name="torso_geom" type="box" size="0.3 0.2 0.08" rgba="0.8 0.3 0.3 1" mass="5.0"/>
+                
+                <!-- Thruster sites at four corners -->
+                <site name="fl_thruster_site" pos="0.25 0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                <site name="fr_thruster_site" pos="0.25 -0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                <site name="hl_thruster_site" pos="-0.25 0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                <site name="hr_thruster_site" pos="-0.25 -0.15 0.08" size="0.04 0.04 0.02" type="box" rgba="1 0 0 1"/>
+                
+                <!-- ===== FRONT LEFT LEG ===== -->
+                <body name="fl_hip" pos="0.27 0.17 -0.08">
+                    <joint name="fl_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
+                    <geom type="sphere" size="0.05" rgba="0.5 0.5 0.5 1" mass="0.5"/>
+                    
+                    <body name="fl_thigh" pos="0 0 0">
+                        <joint name="fl_thigh_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                        <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                        
+                        <body name="fl_shank" pos="0 0 -0.22">
+                            <joint name="fl_shank_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                            
+                            <!-- Normal foot (sphere) -->
+                            <body name="fl_foot" pos="0 0 -0.22">
+                                <geom name="fl_foot_geom" type="sphere" size="0.03" rgba="0.1 0.1 0.1 1" friction="1.5 0.005 0.0001"/>
+                                <site name="fl_foot_site" pos="0 0 0" size="0.02"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+                
+                <!-- ===== FRONT RIGHT LEG ===== -->
+                <body name="fr_hip" pos="0.27 -0.17 -0.08">
+                    <joint name="fr_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
+                    <geom type="sphere" size="0.05" rgba="0.5 0.5 0.5 1" mass="0.5"/>
+                    
+                    <body name="fr_thigh" pos="0 0 0">
+                        <joint name="fr_thigh_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                        <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                        
+                        <body name="fr_shank" pos="0 0 -0.22">
+                            <joint name="fr_shank_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                            
+                            <!-- Normal foot (sphere) -->
+                            <body name="fr_foot" pos="0 0 -0.22">
+                                <geom name="fr_foot_geom" type="sphere" size="0.03" rgba="0.1 0.1 0.1 1" friction="1.5 0.005 0.0001"/>
+                                <site name="fr_foot_site" pos="0 0 0" size="0.02"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+                
+                <!-- ===== HIND LEFT LEG ===== -->
+                <body name="hl_hip" pos="-0.27 0.17 -0.08">
+                    <joint name="hl_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
+                    <geom type="sphere" size="0.05" rgba="0.5 0.5 0.5 1" mass="0.5"/>
+                    
+                    <body name="hl_thigh" pos="0 0 0">
+                        <joint name="hl_thigh_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                        <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                        
+                        <body name="hl_shank" pos="0 0 -0.22">
+                            <joint name="hl_shank_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                            
+                            <!-- Normal foot (sphere) -->
+                            <body name="hl_foot" pos="0 0 -0.22">
+                                <geom name="hl_foot_geom" type="sphere" size="0.03" rgba="0.1 0.1 0.1 1" friction="1.5 0.005 0.0001"/>
+                                <site name="hl_foot_site" pos="0 0 0" size="0.02"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+                
+                <!-- ===== HIND RIGHT LEG ===== -->
+                <body name="hr_hip" pos="-0.27 -0.17 -0.08">
+                    <joint name="hr_hip_joint" type="hinge" axis="0 0 1" range="-0.5 0.5" damping="1.0"/>
+                    <geom type="sphere" size="0.05" rgba="0.5 0.5 0.5 1" mass="0.5"/>
+                    
+                    <body name="hr_thigh" pos="0 0 0">
+                        <joint name="hr_thigh_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                        <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                        
+                        <body name="hr_shank" pos="0 0 -0.22">
+                            <joint name="hr_shank_joint" type="hinge" axis="0 1 0" range="-120 120" damping="1.0"/>
+                            <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.02" mass="1.0" rgba="0.2 0.8 0.2 1"/>
+                            
+                            <!-- Normal foot (sphere) -->
+                            <body name="hr_foot" pos="0 0 -0.22">
+                                <geom name="hr_foot_geom" type="sphere" size="0.03" rgba="0.1 0.1 0.1 1" friction="1.5 0.005 0.0001"/>
+                                <site name="hr_foot_site" pos="0 0 0" size="0.02"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </worldbody>
+        
+        <actuator>
+            <!-- Leg joint actuators (position control) -->
+            <position name="fl_hip_act" joint="fl_hip_joint" kp="50" ctrlrange="-0.5 0.5"/>
+            <position name="fl_thigh_act" joint="fl_thigh_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            <position name="fl_shank_act" joint="fl_shank_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            
+            <position name="fr_hip_act" joint="fr_hip_joint" kp="50" ctrlrange="-0.5 0.5"/>
+            <position name="fr_thigh_act" joint="fr_thigh_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            <position name="fr_shank_act" joint="fr_shank_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            
+            <position name="hl_hip_act" joint="hl_hip_joint" kp="50" ctrlrange="-0.5 0.5"/>
+            <position name="hl_thigh_act" joint="hl_thigh_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            <position name="hl_shank_act" joint="hl_shank_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            
+            <position name="hr_hip_act" joint="hr_hip_joint" kp="50" ctrlrange="-0.5 0.5"/>
+            <position name="hr_thigh_act" joint="hr_thigh_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            <position name="hr_shank_act" joint="hr_shank_joint" kp="50" ctrlrange="-2.0944 2.0944"/>
+            
+            <!-- Thruster actuators (force control) -->
+            <general name="fl_thruster" site="fl_thruster_site" gear="0 0 1 0 0 0" forcerange="0 200" ctrlrange="0 200"/>
+            <general name="fr_thruster" site="fr_thruster_site" gear="0 0 1 0 0 0" forcerange="0 200" ctrlrange="0 200"/>
+            <general name="hl_thruster" site="hl_thruster_site" gear="0 0 1 0 0 0" forcerange="0 200" ctrlrange="0 200"/>
+            <general name="hr_thruster" site="hr_thruster_site" gear="0 0 1 0 0 0" forcerange="0 200" ctrlrange="0 200"/>
+        </actuator>
+    </mujoco>
+    
