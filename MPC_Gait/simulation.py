@@ -128,10 +128,11 @@ class RobotSimulation:
             print(f"  Joint {joint_id}: {joint_name:20s} type={joint_type} "
                 f"qpos[{qpos_addr}] dof[{dof_addr}]")
             
-            # Skip freejoint (type 0)
+            # Skip freejoint (type 0) and wheel joints
             if joint_type != mujoco.mjtJoint.mjJNT_FREE:
-                self.joint_indices.append(joint_id)
-                self.joint_names.append(joint_name)
+                if "wheel" not in joint_name:
+                    self.joint_indices.append(joint_id)
+                    self.joint_names.append(joint_name)
 
         print(f"\n  ℹ Found {len(self.joint_indices)} controllable joints")
         print(f"  Joint order: {self.joint_names[:12]}")
@@ -688,8 +689,14 @@ class RobotSimulation:
         qd_err = qd_des - qd
 
         # Per-joint PD gains (hip yaw joints softer for stability)
-        kp_base = 100.0
-        kd_base = 50.0
+        if self.wheels:
+            # HEAVIER ROBOT (~32kg)
+            kp_base = 400.0
+            kd_base = 20.0
+        else:
+            # LIGHTER ROBOT (~15kg)
+            kp_base = 100.0
+            kd_base = 50.0
         
         kp_vec = np.array([0.25, 1.0, 1.0] * 4) * kp_base  # Hip softer
         kd_vec = np.array([0.30, 1.0, 1.0] * 4) * kd_base
@@ -818,6 +825,89 @@ class RobotSimulation:
                     print(f"[WARN] Actuator near saturation: max|ctrl|={max_ctrl_mag:.2f}/{overall_max:.2f}")
         except Exception:
             pass
+
+    def apply_stabilized_thruster_control(self, contact_states: np.ndarray, 
+                                        base_thrust_ratio: float = 0.6):
+        """
+        Apply stabilized thruster control with PID for Roll/Pitch/Yaw.
+        
+        Args:
+            contact_states (np.ndarray): Contact flags [4] (1=stance, 0=swing)
+            base_thrust_ratio (float): Base thrust as fraction of weight (default 0.6)
+        """
+        if len(self.thruster_indices) == 0:
+            return
+
+        # 1. Get Orientation State
+        quat = self.data.qpos[3:7]  # [w, x, y, z]
+        
+        # Roll (x-axis rotation)
+        sinr_cosp = 2 * (quat[0] * quat[1] + quat[2] * quat[3])
+        cosr_cosp = 1 - 2 * (quat[1] * quat[1] + quat[2] * quat[2])
+        roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+        # Pitch (y-axis rotation)
+        sinp = 2 * (quat[0] * quat[2] - quat[3] * quat[1])
+        if abs(sinp) >= 1:
+            pitch = np.copysign(np.pi / 2, sinp)
+        else:
+            pitch = np.arcsin(sinp)
+
+        # Yaw (z-axis rotation)
+        siny_cosp = 2 * (quat[0] * quat[3] + quat[1] * quat[2])
+        cosy_cosp = 1 - 2 * (quat[2] * quat[2] + quat[3] * quat[3])
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        
+        # Angular velocities
+        w_x = self.data.qvel[3]
+        w_y = self.data.qvel[4]
+        w_z = self.data.qvel[5]
+
+        # 2. PID Gains (Tuned for 32kg robot)
+        kp_roll = 800.0
+        kd_roll = 50.0
+        
+        kp_pitch = 800.0
+        kd_pitch = 50.0
+        
+        kp_yaw = 800.0
+        kd_yaw = 50.0
+
+        # 3. Compute Control Efforts
+        # Targets are 0.0 (stabilize to flat)
+        t_roll = (kp_roll * (0.0 - roll)) - (kd_roll * w_x)
+        t_pitch = (kp_pitch * (0.0 - pitch)) - (kd_pitch * w_y)
+        t_yaw = (kp_yaw * (0.0 - yaw)) - (kd_yaw * w_z) # Yaw target 0 might be bad if turning? 
+        # For now, stabilize Yaw to 0 (straight line walking). 
+        # Ideally, target yaw should come from planner.
+        
+        # 4. Compute Base Thrust
+        robot_weight = self.params.robot_mass * 9.81
+        
+        # Adaptive boost for swing legs
+        num_swing = np.sum(contact_states == 0)
+        swing_boost = 0.05 * num_swing # +5% per swing leg
+        
+        total_base_thrust = robot_weight * (base_thrust_ratio + swing_boost)
+        base = total_base_thrust / 4.0
+
+        # 5. Mixing Logic
+        # FL (Front Left): +T_roll - T_pitch + T_yaw
+        # FR (Front Right): -T_roll - T_pitch - T_yaw
+        # HL (Rear Left): +T_roll + T_pitch - T_yaw
+        # HR (Rear Right): -T_roll + T_pitch + T_yaw
+        
+        f_fl = base + t_roll - t_pitch + t_yaw
+        f_fr = base - t_roll - t_pitch - t_yaw
+        f_hl = base + t_roll + t_pitch - t_yaw
+        f_hr = base - t_roll + t_pitch + t_yaw
+        
+        forces = [f_fl, f_fr, f_hl, f_hr]
+        
+        # 6. Apply
+        for i, idx in enumerate(self.thruster_indices):
+            force = np.clip(forces[i], 0, 500)
+            self.data.ctrl[idx] = force
 
     def apply_thruster_forces(self, total_thrust: float = None):
         """

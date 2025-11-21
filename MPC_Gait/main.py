@@ -499,11 +499,10 @@ def main():
                 sim.apply_control_new(u_apply, current_contact_states)
                 # Apply adaptive thrusters if in wheeled mode
                 if WHEELS_ON:
-                    # Adaptive thrust based on gait state
-                    sim.apply_adaptive_thruster_forces(
+                    # STABILIZED THRUSTER CONTROL (PID)
+                    sim.apply_stabilized_thruster_control(
                         contact_states=current_contact_states,
-                        base_thrust_ratio=0.5,   # 50% base support
-                        swing_boost=0.3          # +30% per swinging leg
+                        base_thrust_ratio=0.6   # 60% base support
                     )
                 sim.step_physics()
             sim.render()
