@@ -421,7 +421,7 @@ def main():
     cost_history = []
     
     current_contact_states = np.ones(4)
-    controller.gait_gen.set_gait_mode('hybrid_walk')
+    controller.gait_gen.set_gait_mode('hybrid_trot')
 
     try:
         for step in range(num_steps):
