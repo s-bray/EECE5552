@@ -398,6 +398,12 @@ def main():
         
         for _ in range(num_sim_steps_per_control):
             sim.apply_control_new(u_stabilize, contact_states_stable)
+            # Apply thrusters during stabilization too!
+            if WHEELS_ON:
+                sim.apply_stabilized_thruster_control(
+                    contact_states=contact_states_stable,
+                    base_thrust_ratio=0.4
+                )
             sim.step_physics()
         sim.render()
     
@@ -421,7 +427,7 @@ def main():
     cost_history = []
     
     current_contact_states = np.ones(4)
-    controller.gait_gen.set_gait_mode('hybrid_trot')
+    controller.gait_gen.set_gait_mode('hybrid_walk')
 
     try:
         for step in range(num_steps):
