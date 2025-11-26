@@ -43,7 +43,6 @@ class RobotSimulation:
     
     Attributes:
         params (MPCParameters): MPC configuration parameters
-        xml_path (str): Path to robot XML model file
         use_gui (bool): Whether to enable visual rendering
         verify (bool): Verification mode flag (disables control)
         wheels (bool): Whether robot has wheels on legs
@@ -64,14 +63,12 @@ class RobotSimulation:
         >>> sim.render()
     """
     
-    def __init__(self, xml_path: str, params: MPCParameters, verify=False, 
+    def __init__(self, params: MPCParameters, verify=False, 
                  use_gui: bool = True, wheels=False):
         """
         Initialize the MuJoCo simulation environment.
         
         Args:
-            xml_path (str): Path to robot XML model file. If file doesn't exist,
-                          a simple quadruped model will be generated programmatically.
             params (MPCParameters): MPC configuration parameters including robot
                                   mass, inertia, and control settings.
             verify (bool, optional): If True, enables verification mode which
@@ -92,22 +89,17 @@ class RobotSimulation:
             - Verifies ground contact after initialization
         """
         self.params = params
-        self.xml_path = xml_path
         self.use_gui = use_gui
         self.verify = verify
         self.wheels = wheels
         
         # Load model
-        if os.path.exists(xml_path):
-            self.model = mujoco.MjModel.from_xml_path(xml_path)
+        print("Creating simple quadruped model...")
+        if self.wheels:
+            xml_content = create_simple_quadruped_xml_wheels()
         else:
-            print(f"XML file not found: {xml_path}")
-            print("Creating simple quadruped model...")
-            if self.wheels:
-                xml_content = create_simple_quadruped_xml_wheels()
-            else:
-                xml_content = create_simple_quadruped_xml()
-            self.model = mujoco.MjModel.from_xml_string(xml_content)
+            xml_content = create_simple_quadruped_xml()
+        self.model = mujoco.MjModel.from_xml_string(xml_content)
         
         self.data = mujoco.MjData(self.model)
         
@@ -905,6 +897,130 @@ class RobotSimulation:
         forces = [f_fl, f_fr, f_hl, f_hr]
         
         # 6. Apply
+        for i, idx in enumerate(self.thruster_indices):
+            force = np.clip(forces[i], 0, 500)
+            self.data.ctrl[idx] = force
+
+    def apply_trot_thruster_control(self, contact_states: np.ndarray, 
+                                    base_thrust_ratio: float = 0.5):
+        """
+        Apply trot-specific thruster control with targeted support for swinging legs.
+        
+        Optimized for trot gait where diagonal pairs alternate. Provides extra thrust
+        on thrusters corresponding to legs in the air to prevent tipping during
+        the flight phase.
+        
+        Args:
+            contact_states (np.ndarray): Contact flags [4] (1=stance, 0=swing)
+                                         Order: [FL, FR, HL, HR]
+            base_thrust_ratio (float): Base thrust as fraction of weight (default 0.5)
+        
+        Trot Gait Pattern:
+            Phase 1: FL+HR stance, FR+HL swing → Boost FR+HL thrusters
+            Phase 2: FR+HL stance, FL+HR swing → Boost FL+HR thrusters
+        
+        Control Strategy:
+            1. Base thrust: 50% of weight (higher than walk for dynamic stability)
+            2. Swing leg boost: +15% extra on thrusters under swinging legs
+            3. PID orientation control: Same as walk mode
+        
+        Example:
+            FR+HL swinging (contact_states = [1, 0, 0, 1]):
+            - FL thruster: 50% base (stance leg)
+            - FR thruster: 50% + 15% = 65% (swing leg - BOOSTED)
+            - HL thruster: 50% + 15% = 65% (swing leg - BOOSTED)
+            - HR thruster: 50% base (stance leg)
+        """
+        if len(self.thruster_indices) == 0:
+            return
+
+        # 1. Get Orientation State (same as walk mode)
+        quat = self.data.qpos[3:7]  # [w, x, y, z]
+        
+        # Roll (x-axis rotation)
+        sinr_cosp = 2 * (quat[0] * quat[1] + quat[2] * quat[3])
+        cosr_cosp = 1 - 2 * (quat[1] * quat[1] + quat[2] * quat[2])
+        roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+        # Pitch (y-axis rotation)
+        sinp = 2 * (quat[0] * quat[2] - quat[3] * quat[1])
+        if abs(sinp) >= 1:
+            pitch = np.copysign(np.pi / 2, sinp)
+        else:
+            pitch = np.arcsin(sinp)
+
+        # Yaw (z-axis rotation)
+        siny_cosp = 2 * (quat[0] * quat[3] + quat[1] * quat[2])
+        cosy_cosp = 1 - 2 * (quat[2] * quat[2] + quat[3] * quat[3])
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        
+        # Angular velocities
+        w_x = self.data.qvel[3]
+        w_y = self.data.qvel[4]
+        w_z = self.data.qvel[5]
+        
+        # Vertical velocity (for damping)
+        v_z = self.data.qvel[2]
+
+        # 2. PID Gains (TROT-SPECIFIC: Stronger damping + Integral for roll)
+        kp_roll = 600.0  # Increased for faster roll correction
+        ki_roll = 100.0  # NEW: Integral to eliminate steady-state roll bias
+        kd_roll = 50.0   # Higher damping for trot (vs 30 for walk)
+        
+        kp_pitch = 400.0
+        kd_pitch = 50.0  # Higher damping for trot
+        
+        kp_yaw = 400.0
+        kd_yaw = 30.0
+        
+        # Roll integral accumulator (with anti-windup)
+        if not hasattr(self, '_roll_integral'):
+            self._roll_integral = 0.0
+        
+        dt = self.model.opt.timestep
+        self._roll_integral += (0.0 - roll) * dt
+        # Anti-windup: limit integral to prevent overshooting
+        self._roll_integral = np.clip(self._roll_integral, -0.2, 0.2)
+
+        # 3. Compute Control Efforts (PID for roll, PD for pitch/yaw)
+        t_roll = (kp_roll * (0.0 - roll)) + (ki_roll * self._roll_integral) - (kd_roll * w_x)
+        t_pitch = (kp_pitch * (0.0 - pitch)) - (kd_pitch * w_y)
+        t_yaw = (kp_yaw * (0.0 - yaw)) - (kd_yaw * w_z)
+        
+        # 4. Compute Base Thrust (TROT-SPECIFIC)
+        robot_weight = self.params.robot_mass * 9.81
+        
+        # Higher base thrust for trot (50% vs 40% for walk)
+        total_base_thrust = robot_weight * base_thrust_ratio
+        
+        # VERTICAL VELOCITY DAMPING: Reduce thrust if rising too fast
+        # This prevents bouncing and maintains ground contact
+        kd_vertical = 20.0  # Vertical damping coefficient
+        vertical_damping = -kd_vertical * v_z  # Negative feedback on upward velocity
+        
+        # Distribute base thrust + vertical damping
+        base = (total_base_thrust + vertical_damping) / 4.0
+        
+        # 5. TROT-SPECIFIC: Targeted boost for swinging legs
+        # Add extra thrust on thrusters corresponding to legs in the air
+        swing_boost_per_leg = robot_weight * 0.15  # 15% extra per swing leg
+        
+        # Create per-thruster boost array
+        # Thruster order: [FL, FR, HL, HR]
+        leg_boost = np.zeros(4)
+        for i in range(4):
+            if contact_states[i] == 0:  # Leg is swinging
+                leg_boost[i] = swing_boost_per_leg / 4.0  # Distribute to this thruster
+
+        # 6. Mixing Logic (same as walk, but with per-leg boost)
+        f_fl = base + leg_boost[0] + t_roll - t_pitch + t_yaw
+        f_fr = base + leg_boost[1] - t_roll - t_pitch - t_yaw
+        f_hl = base + leg_boost[2] + t_roll + t_pitch - t_yaw
+        f_hr = base + leg_boost[3] - t_roll + t_pitch + t_yaw
+        
+        forces = [f_fl, f_fr, f_hl, f_hr]
+        
+        # 7. Apply
         for i, idx in enumerate(self.thruster_indices):
             force = np.clip(forces[i], 0, 500)
             self.data.ctrl[idx] = force

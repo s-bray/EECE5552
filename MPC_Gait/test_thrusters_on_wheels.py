@@ -28,7 +28,7 @@ def test_thrusters():
     print("=" * 60)
     
     # Load model
-    model = mujoco.MjModel.from_xml_path("/home/poison-arrow/EECE5552/MPC_Gait/wheeled_quadruped_with_thrusters.xml")
+    model = mujoco.MjModel.from_xml_path("/home/poison-arrow/EECE5552/wheeled_quadruped_with_thrusters.xml")
     data = mujoco.MjData(model)
     
     print("\n✓ Model loaded successfully")
@@ -105,8 +105,8 @@ def test_thrusters():
             kp_pitch = 800.0
             kd_pitch = 50.0
             
-            kp_yaw = 800.0
-            kd_yaw = 50.0
+            kp_yaw = 800.0  # Much higher for wheels - they resist yaw rotation
+            kd_yaw = 50.0   # Strong damping to prevent oscillation
 
             # Get robot state
             # Height

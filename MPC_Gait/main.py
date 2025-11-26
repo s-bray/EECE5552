@@ -27,7 +27,6 @@ Usage:
     python main.py
     
     Adjust configuration in main() function:
-    - ROBOT_XML_PATH: Path to robot model
     - TARGET_VELOCITY: Desired [vx, vy, vz, ωx, ωy, ωz]
     - SIMULATION_TIME: Duration in seconds
     - USE_GUI: Enable/disable 3D visualization
@@ -228,8 +227,6 @@ def main():
                 10. Render visualization
         
         Configuration Variables:
-            ROBOT_XML_PATH (str): Path to MuJoCo XML model
-            USE_SIMPLE_ROBOT (bool): Use programmatic model (deprecated)
             USE_GUI (bool): Enable 3D visualization
             SIMULATION_TIME (float): Total duration in seconds
             IN_VERIFICATION (bool): Debug mode (no control)
@@ -259,7 +256,6 @@ def main():
         Raises:
             KeyboardInterrupt: On user interrupt or viewer close
             ImportError: If required dependencies missing
-            FileNotFoundError: If robot XML not found and generation fails
         
         Example:
             >>> if __name__ == "__main__":
@@ -282,8 +278,6 @@ def main():
     # CONFIGURATION
     # ==========================================
     
-    ROBOT_XML_PATH = "/home/poison-arrow/MPC_Gait/anymal_simplified.xml"
-    USE_SIMPLE_ROBOT = False
     USE_GUI = True
     SIMULATION_TIME = 30.0
     IN_VERIFICATION = False
@@ -347,7 +341,7 @@ def main():
     print("\n[4/5] Setting up MuJoCo simulation...")
     
     try:
-        sim = RobotSimulation(ROBOT_XML_PATH, params, use_gui=USE_GUI, 
+        sim = RobotSimulation(params, use_gui=USE_GUI, 
                              verify=IN_VERIFICATION, wheels=WHEELS_ON)
         print(f"  ✓ Robot loaded successfully")
         print(f"  ✓ Number of joints: {len(sim.joint_indices)}")
@@ -505,11 +499,21 @@ def main():
                 sim.apply_control_new(u_apply, current_contact_states)
                 # Apply adaptive thrusters if in wheeled mode
                 if WHEELS_ON:
-                    # STABILIZED THRUSTER CONTROL (PID)
-                    sim.apply_stabilized_thruster_control(
-                        contact_states=current_contact_states,
-                        base_thrust_ratio=0.6   # 60% base support
-                    )
+                    # Get current gait mode
+                    current_gait_mode = controller.gait_gen.gait_mode
+                    
+                    if current_gait_mode == 'hybrid_trot':
+                        # TROT-SPECIFIC: Targeted boost for swinging legs
+                        sim.apply_trot_thruster_control(
+                            contact_states=current_contact_states,
+                            base_thrust_ratio=0.5
+                        )
+                    else:
+                        # WALK MODE: Uniform adaptive thrust
+                        sim.apply_stabilized_thruster_control(
+                            contact_states=current_contact_states,
+                            base_thrust_ratio=0.6   
+                        )
                 sim.step_physics()
             sim.render()
 
