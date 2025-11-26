@@ -15,7 +15,6 @@ print("="*70)
 # Setup
 params = MPCParameters(robot_mass=15.0, control_freq=50.0)
 sim = RobotSimulation(
-    "/home/poison-arrow/MPC_Gait/anymal_simplified.xml",
     params, use_gui=True, verify=False, wheels=False
 )
 
