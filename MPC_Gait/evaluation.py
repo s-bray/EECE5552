@@ -90,6 +90,10 @@ def plot_evaluation():
         time = get_col('time')
         if time is None: continue
         
+        # Normalize time to start at 0
+        if len(time) > 0:
+            time = time - time[0]
+        
         # 1. All Controls (Summary)
         # Just plot the first few to avoid clutter, or maybe norm?
         # Let's plot total control effort (norm)
