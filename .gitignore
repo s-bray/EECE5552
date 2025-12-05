@@ -1,2 +1,4 @@
 __pycache__/
 MUJOCO_LOG.TXT
+csv/
+plots/

@@ -24,6 +24,7 @@ import mujoco.viewer
 import os
 from scipy.spatial.transform import Rotation
 from create_simple_quadruped import create_simple_quadruped_xml, create_simple_quadruped_xml_wheels
+import controllers
 
 from config import MPCParameters
 
@@ -237,6 +238,96 @@ class RobotSimulation:
             self.data.qpos[2] = 0.35
             mujoco.mj_forward(self.model, self.data)
             print(f"  ℹ After adjustment: contacts = {self.data.ncon}")
+            
+    def init_logging(self):
+        """Initialize data logging storage."""
+        self.logs = {
+            'time': [],
+            'qpos': [],
+            'qvel': [],
+            'ctrl': [],
+            'base_pos': [],
+            'base_rpy': []
+        }
+        print("  ℹ Data logging initialized")
+
+    def log_state(self):
+        """Record current simulation state."""
+        if not hasattr(self, 'logs'):
+            return
+            
+        self.logs['time'].append(self.data.time)
+        self.logs['qpos'].append(self.data.qpos.copy())
+        self.logs['qvel'].append(self.data.qvel.copy())
+        self.logs['ctrl'].append(self.data.ctrl.copy())
+        self.logs['base_pos'].append(self.data.qpos[0:3].copy())
+        
+        # Convert quaternion to RPY
+        quat = self.data.qpos[3:7]
+        r = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
+        self.logs['base_rpy'].append(r.as_euler('xyz', degrees=True))
+
+    def save_logs(self, filename="simulation_logs.csv"):
+        """Save recorded logs to CSV file."""
+        if not hasattr(self, 'logs') or not self.logs['time']:
+            print("  ⚠️ No logs to save!")
+            return
+            
+        import csv
+        
+        # Ensure csv directory exists
+        log_dir = "csv"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Prepend directory to filename if not already there
+        if not filename.startswith(log_dir):
+            filepath = os.path.join(log_dir, os.path.basename(filename))
+        else:
+            filepath = filename
+            
+        # Prepare header
+        header = ['time', 'base_x', 'base_y', 'base_z', 'roll', 'pitch', 'yaw']
+        
+        # Add control columns
+        num_ctrl = len(self.logs['ctrl'][0])
+        for i in range(num_ctrl):
+            header.append(f'ctrl_{i}')
+            
+        # Add joint position columns
+        for i, name in enumerate(self.joint_names):
+            header.append(f'q_{name}')
+            
+        try:
+            with open(filepath, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+                
+                num_steps = len(self.logs['time'])
+                for i in range(num_steps):
+                    row = []
+                    row.append(self.logs['time'][i])
+                    
+                    # Base Pos
+                    row.extend(self.logs['base_pos'][i])
+                    
+                    # Base RPY
+                    row.extend(self.logs['base_rpy'][i])
+                    
+                    # Controls
+                    row.extend(self.logs['ctrl'][i])
+                    
+                    # Joint Positions
+                    qpos = self.logs['qpos'][i]
+                    for j, name in enumerate(self.joint_names):
+                        jid = self.joint_indices[j]
+                        qaddr = self.model.jnt_qposadr[jid]
+                        row.append(qpos[qaddr])
+                        
+                    writer.writerow(row)
+                    
+            print(f"  ✓ Logs saved to {filepath} ({num_steps} rows)")
+        except Exception as e:
+            print(f"  ✗ Error saving logs: {e}")
         
     def get_state(self) -> np.ndarray:
         """
@@ -327,180 +418,10 @@ class RobotSimulation:
 
     def apply_control(self, u: np.ndarray, contact_states: np.ndarray = None):
         """
-        Apply control input using robust PD control with contact force integration.
-        
-        This is the LEGACY control method. Consider using apply_control_new() instead.
-        
-        Args:
-            u (np.ndarray): Control vector of shape (24,) with layout:
-                [0:12]  - λ_e (contact forces) in body frame [N]
-                          Format: [FL_x, FL_y, FL_z, FR_x, FR_y, FR_z, HL_x, HL_y, HL_z, HR_x, HR_y, HR_z]
-                [12:24] - u_j (desired joint velocities) [rad/s]
-            contact_states (np.ndarray, optional): Binary array [4] indicating contact
-                                                  (1=stance, 0=swing) for each leg.
-                                                  If None, will auto-detect from simulation.
-        
-        Side Effects:
-            - Modifies self.data.ctrl actuator commands
-            - Updates internal tracking variables for debugging
-        
-        Control Law:
-            τ = K_p(q_d - q) + K_d(q̇_d - q̇) + J^T λ + τ_gravity
-            
-            Where:
-            - K_p: Position gain (100.0 N⋅m/rad, softer for hip joints)
-            - K_d: Damping gain (10.0 N⋅m⋅s/rad)
-            - J: Foot Jacobian (computed via mujoco.mj_jacSite)
-            - λ: Contact forces (only applied to stance legs)
-            - τ_gravity: Gravity compensation from qfrc_bias
-        
-        Notes:
-            - Hip joints use 30% of standard K_p for stability
-            - Contact forces only applied when contact_states[leg] == 1
-            - Torques clamped to ±80 N⋅m per joint
-            - Forces transformed from body frame to world frame
-            - Unilateral contact constraint: only pushing forces (F_z ≥ 0)
+        Apply PD control + Feedforward contact forces (Legacy method).
+        Delegates to controllers.apply_control.
         """
-        
-        # UNPACK CONTROL
-        lambda_e = np.asarray(u[0:12]).reshape(4, 3)  # 4 legs × (Fx, Fy, Fz)
-        u_j_desired = np.asarray(u[12:24]).flatten()
-        
-        dt = float(self.model.opt.timestep)
-        
-        # PD GAINS (TUNED FOR STABILITY)
-        kp = 100.0  # Position gain
-        kd = 50.0   # Damping gain
-        tau_limit = 80.0  # Torque limit per joint
-        
-        # READ CURRENT JOINT STATES
-        q_current = np.zeros(12)
-        qd_current = np.zeros(12)
-        
-        for i, joint_idx in enumerate(self.joint_indices[:12]):
-            qpos_addr = int(self.model.jnt_qposadr[joint_idx])
-            dof_addr = int(self.model.jnt_dofadr[joint_idx])
-            q_current[i] = float(self.data.qpos[qpos_addr])
-            qd_current[i] = float(self.data.qvel[dof_addr])
-        
-        # POSTURE CONTROL
-        # Maintain nominal standing pose
-        if not hasattr(self, '_q_nominal'):
-            self._q_nominal = np.array([
-                0.0, 0.6, -1.29,  # FL
-                0.0, 0.6, -1.29,  # FR
-                0.0, 0.6, -1.29,  # HL
-                0.0, 0.6, -1.29   # HR
-            ])
-        
-        # If no velocity command, hold nominal pose
-        if np.linalg.norm(u_j_desired) < 1e-3:
-            q_desired = self._q_nominal.copy()
-            qd_desired = np.zeros(12)
-        else:
-            # Track velocity command
-            q_desired = q_current + u_j_desired * dt
-            qd_desired = u_j_desired
-        
-        # COMPUTE PD TORQUES
-        def wrap_to_pi(angle):
-            """Wrap angle to [-pi, pi]"""
-            return (angle + np.pi) % (2.0 * np.pi) - np.pi
-        
-        # Position error with angle wrapping
-        q_error = wrap_to_pi(q_desired - q_current)
-        qd_error = qd_desired - qd_current
-        
-        # Per-joint gains (hip joints softer)
-        kp_vec = np.array([0.3, 1.0, 1.0] * 4) * kp
-        kd_vec = np.array([0.4, 1.0, 1.0] * 4) * kd
-        
-        tau_pd = kp_vec * q_error + kd_vec * qd_error
-        
-        # CONTACT FORCE CONTRIBUTION
-        tau_contact = np.zeros(12)
-        
-        # Detect actual contacts if not provided
-        if contact_states is None:
-            contact_states = self._detect_contacts()
-        
-        # Convert forces to joint torques via Jacobian transpose
-        for leg_idx in range(4):
-            if contact_states[leg_idx] == 0:
-                continue  # Leg in swing, no force
-            
-            # Get foot force in world frame
-            f_body = lambda_e[leg_idx]
-            
-            # Convert to world frame
-            base_quat = self.data.qpos[3:7]
-            quat_scipy = np.array([base_quat[1], base_quat[2], base_quat[3], base_quat[0]])
-            R_WB = Rotation.from_quat(quat_scipy).as_matrix()
-            f_world = R_WB @ f_body
-            
-            # Only push forces (no pulling)
-            f_world[2] = max(0.0, f_world[2])
-            
-            # Get Jacobian for this foot
-            foot_name = ['fl_foot_site', 'fr_foot_site', 'hl_foot_site', 'hr_foot_site'][leg_idx]
-            jacp = self._compute_foot_jacobian(foot_name)
-            
-            if jacp is not None:
-                # τ = J^T f
-                tau_from_force = jacp.T @ f_world
-                
-                # Extract joint contributions for this leg
-                leg_start = leg_idx * 3
-                for j in range(3):
-                    joint_idx = self.joint_indices[leg_start + j]
-                    dof_addr = int(self.model.jnt_dofadr[joint_idx])
-                    if dof_addr < len(tau_from_force):
-                        tau_contact[leg_start + j] += tau_from_force[dof_addr]
-        
-        # GRAVITY COMPENSATION
-        mujoco.mj_forward(self.model, self.data)
-        qfrc_bias = np.asarray(self.data.qfrc_bias)
-        
-        tau_gravity = np.zeros(12)
-        for i, joint_idx in enumerate(self.joint_indices[:12]):
-            dof_addr = int(self.model.jnt_dofadr[joint_idx])
-            if dof_addr < len(qfrc_bias):
-                tau_gravity[i] = qfrc_bias[dof_addr]
-        
-        # TOTAL TORQUE
-        # Weight contact forces moderately
-        w_contact = 1.0
-        tau_total = tau_pd + w_contact * tau_contact + tau_gravity
-        
-        # Clamp to limits
-        tau_total = np.clip(tau_total, -tau_limit, tau_limit)
-        
-        # APPLY TO ACTUATORS
-        for i, joint_idx in enumerate(self.joint_indices[:12]):
-            act_idx = self.joint_to_actuator.get(joint_idx, i)
-            
-            if act_idx >= self.model.nu:
-                continue
-            
-            # Get actuator gear ratio
-            try:
-                gear = float(self.model.actuator_gear[act_idx, 0])
-                if not np.isfinite(gear) or abs(gear) < 1e-9:
-                    gear = 1.0
-            except:
-                gear = 1.0
-            
-            # Convert torque to control signal
-            ctrl_signal = tau_total[i] / gear
-            
-            # Clamp to actuator limits
-            try:
-                ctrl_min, ctrl_max = self.model.actuator_ctrlrange[act_idx]
-                ctrl_signal = np.clip(ctrl_signal, ctrl_min, ctrl_max)
-            except:
-                ctrl_signal = np.clip(ctrl_signal, -1.0, 1.0)
-            
-            self.data.ctrl[act_idx] = float(ctrl_signal)
+        controllers.apply_control(self, u, contact_states)
     
     def _detect_contacts(self) -> np.ndarray:
         """
@@ -580,450 +501,25 @@ class RobotSimulation:
     def apply_control_new(self, u: np.ndarray, contact_states: np.ndarray = None):
         """
         Apply control with improved Jacobian-based force mapping (RECOMMENDED).
-        
-        This is the IMPROVED control method with better stability and performance.
-        Uses proper τ = J^T λ + τ_PD formulation with enhanced tuning.
-        
-        Args:
-            u (np.ndarray): Control vector of shape (24,) with layout:
-                [0:12]  - λ_e (contact forces) in body frame [N]
-                          Format: [FL_x, FL_y, FL_z, FR_x, ...] (4 legs × 3)
-                [12:24] - u_j (desired joint velocities) [rad/s]
-            contact_states (np.ndarray, optional): Binary contact indicators [4].
-                                                  If None, auto-detects from physics.
-        
-        Side Effects:
-            - Sets self.data.ctrl actuator commands
-            - Prints verification info on first call if verify=True
-            - Tracks saturation warnings
-        
-        Control Improvements over apply_control():
-            1. Better PD gain tuning (K_p=100, K_d=50)
-            2. Proper velocity integration: q_d = q + u_j * dt
-            3. Robust contact force transformation
-            4. Fallback to body Jacobian if site unavailable
-            5. Saturation monitoring
-        
-        Control Law:
-            τ_total = K_p⋅(q_des - q) + K_d⋅(q̇_des - q̇) + w_contact⋅J^T⋅λ + τ_gravity
-            
-        Gains:
-            - Hip yaw: K_p = 25 N⋅m/rad, K_d = 15 N⋅m⋅s/rad
-            - Thigh/shank: K_p = 100 N⋅m/rad, K_d = 50 N⋅m⋅s/rad
-            - Contact weight: w_contact = 1.0
-            - Torque limit: ±80 N⋅m
-        
-        Notes:
-            - In verification mode, sets all controls to zero
-            - Enforces unilateral contact (F_z ≥ 0)
-            - Wraps angle errors to [-π, π]
-            - Clips final torques to actuator limits
-        
-        Example:
-            >>> u = np.zeros(24)
-            >>> u[2] = 100.0  # FL vertical force
-            >>> u[14] = 0.5   # FL thigh velocity
-            >>> sim.apply_control_new(u, contact_states=[1,1,1,1])
+        Delegates to controllers.apply_control_new.
         """
-
-        # VERIFICATION MODE
-        if getattr(self, "verify", False):
-            if not hasattr(self, "_verified_once"):
-                self.debug_mujoco_mapping()
-                print("\n=== ACTUATOR PROPERTIES (ctrlrange, gear) ===")
-                for a in range(self.model.nu):
-                    cmin, cmax = self.model.actuator_ctrlrange[a]
-                    try:
-                        gear = float(self.model.actuator_gear[a, 0])
-                    except Exception:
-                        gear = 1.0
-                    print(f"  act {a:2d}  ctrlrange=[{cmin:.1f} {cmax:.1f}]  gear={gear:.1f}")
-                self._verified_once = True
-            self.data.ctrl[:] = 0.0
-            return
-
-        # UNPACK CONTROL INPUTS
-        lambda_e = np.asarray(u[0:12]).reshape(4, 3)     # Contact forces [FL, FR, HL, HR] × (Fx,Fy,Fz)
-        u_j_desired = np.asarray(u[12:24]).reshape(-1)   # Desired joint velocities (12)
-        dt = float(self.model.opt.timestep)
-
-        # READ CURRENT JOINT STATES
-        joint_ids = self.joint_indices[:12]
-        q = np.zeros(12)
-        qd = np.zeros(12)
-        dofaddrs = []
-        
-        for i, jid in enumerate(joint_ids):
-            qpos_addr = int(self.model.jnt_qposadr[jid])
-            dofadr = int(self.model.jnt_dofadr[jid])
-            q[i] = float(self.data.qpos[qpos_addr])
-            qd[i] = float(self.data.qvel[dofadr])
-            dofaddrs.append(dofadr)
-
-        # NOMINAL POSTURE
-        if not hasattr(self, '_q_nominal') or self._q_nominal is None:
-            self._q_nominal = np.array([0.0, 0.7, -1.4] * 4)
-
-        # COMPUTE DESIRED JOINT POSITIONS
-        if np.linalg.norm(u_j_desired) < 1e-6:
-            q_des = self._q_nominal.copy()
-            qd_des = np.zeros_like(qd)
-        else:
-            q_des = q + u_j_desired * dt
-            qd_des = u_j_desired
-
-        # PD CONTROL WITH ANGLE WRAPPING
-        def wrap_pi(e):
-            """Wrap angle error to [-pi, pi]"""
-            return (e + np.pi) % (2.0 * np.pi) - np.pi
-
-        q_err = wrap_pi(q_des - q)
-        qd_err = qd_des - qd
-
-        # Per-joint PD gains (hip yaw joints softer for stability)
-        if self.wheels:
-            # HEAVIER ROBOT (~32kg)
-            kp_base = 400.0
-            kd_base = 20.0
-        else:
-            # LIGHTER ROBOT (~15kg)
-            kp_base = 100.0
-            kd_base = 50.0
-        
-        kp_vec = np.array([0.25, 1.0, 1.0] * 4) * kp_base  # Hip softer
-        kd_vec = np.array([0.30, 1.0, 1.0] * 4) * kd_base
-        
-        tau_pd = kp_vec * q_err + kd_vec * qd_err
-
-        # CONTACT FORCE CONTRIBUTION VIA JACOBIAN TRANSPOSE
-        
-        # Detect contact states if not provided
-        if contact_states is None:
-            contact_states = self._detect_contacts()
-        else:
-            contact_states = np.asarray(contact_states).astype(int).reshape(-1)[:4]
-
-        # Get base rotation for force transformation
-        base_quat = self.data.qpos[3:7]  # [w, x, y, z]
-        quat_scipy = np.array([base_quat[1], base_quat[2], base_quat[3], base_quat[0]])
-        R_WB = Rotation.from_quat(quat_scipy).as_matrix()
-
-        # Foot site names (preferred) with shank body fallback
-        site_names = ["fl_foot_site", "fr_foot_site", "hl_foot_site", "hr_foot_site"]
-        body_fallback = ["fl_shank", "fr_shank", "hl_shank", "hr_shank"]
-
-        nv = self.model.nv
-        tau_contact_nv = np.zeros(nv)  # Torques in full generalized coordinate space
-
-        for leg in range(4):
-            if contact_states[leg] == 0:
-                continue  # Leg in swing, skip
-            
-            # Get foot Jacobian
-            try:
-                sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site_names[leg])
-                jacp = np.zeros((3, nv), dtype=np.float64)
-                jacr = np.zeros((3, nv), dtype=np.float64)
-                mujoco.mj_jacSite(self.model, self.data, jacp, jacr, sid)
-            except Exception:
-                jacp = self._compute_foot_jacobian(body_fallback[leg])
-                if jacp is None:
-                    continue
-
-            # Transform force from body frame to world frame
-            f_body = lambda_e[leg].copy()
-            f_world = R_WB @ f_body
-            
-            # Enforce unilateral contact (no pulling)
-            f_world[2] = max(0.0, f_world[2])
-            
-            # Compute joint torques: τ = J^T f
-            tau_contact_nv += jacp.T @ f_world
-
-        # Extract joint torques from full generalized torque vector
-        tau_contact = np.zeros(12)
-        for i in range(12):
-            dofadr = dofaddrs[i]
-            if 0 <= dofadr < nv:
-                tau_contact[i] = tau_contact_nv[dofadr]
-
-        # GRAVITY COMPENSATION
-        mujoco.mj_forward(self.model, self.data)
-        qfrc_bias = np.asarray(self.data.qfrc_bias)
-        
-        tau_gravity = np.zeros(12)
-        for i in range(12):
-            dofadr = dofaddrs[i]
-            if 0 <= dofadr < len(qfrc_bias):
-                tau_gravity[i] = qfrc_bias[dofadr]
-
-        # TOTAL TORQUE CALCULATION
-        w_contact = 1.0  # Contact force weight
-        
-        tau_total_joint = tau_pd + w_contact * tau_contact + tau_gravity
-        
-        # Clamp to safe limits
-        tau_limit = 80.0
-        tau_total_joint = np.clip(tau_total_joint, -tau_limit, tau_limit)
-
-        # APPLY TO ACTUATORS
-        if not hasattr(self, '_joint_to_actuator') or self._joint_to_actuator is None:
-            jtact = {}
-            for a in range(self.model.nu):
-                try:
-                    jid = int(self.model.actuator_trnid[a][0])
-                    jtact[jid] = a
-                except Exception:
-                    pass
-            self._joint_to_actuator = jtact
-
-        max_ctrl_mag = 0.0
-        
-        for i, jid in enumerate(joint_ids):
-            act_idx = self._joint_to_actuator.get(jid, i if i < self.model.nu else None)
-            if act_idx is None:
-                continue
-            
-            # Get actuator gear ratio
-            try:
-                gear = float(self.model.actuator_gear[act_idx, 0])
-                if not np.isfinite(gear) or abs(gear) < 1e-9:
-                    gear = 1.0
-            except Exception:
-                gear = 1.0
-
-            # Convert torque to control signal
-            ctrl = float(tau_total_joint[i] / gear)
-            
-            # Clamp to actuator limits
-            try:
-                cmin, cmax = self.model.actuator_ctrlrange[act_idx]
-                ctrl = float(np.clip(ctrl, cmin, cmax))
-            except Exception:
-                ctrl = float(np.clip(ctrl, -1.0, 1.0))
-
-            self.data.ctrl[act_idx] = ctrl
-            max_ctrl_mag = max(max_ctrl_mag, abs(ctrl))
-
-        # SATURATION WARNING
-        try:
-            overall_max = float(np.max(self.model.actuator_ctrlrange[:, 1]))
-            if max_ctrl_mag > 0.9 * overall_max:
-                if not hasattr(self, '_saturation_warning_count'):
-                    self._saturation_warning_count = 0
-                self._saturation_warning_count += 1
-                
-                if self._saturation_warning_count % 100 == 0:
-                    print(f"[WARN] Actuator near saturation: max|ctrl|={max_ctrl_mag:.2f}/{overall_max:.2f}")
-        except Exception:
-            pass
+        controllers.apply_control_new(self, u, contact_states)
 
     def apply_stabilized_thruster_control(self, contact_states: np.ndarray, 
-                                        base_thrust_ratio: float = 0.6):
+                                          base_thrust_ratio: float = 0.4):
         """
-        Apply stabilized thruster control with PID for Roll/Pitch/Yaw.
-        
-        Args:
-            contact_states (np.ndarray): Contact flags [4] (1=stance, 0=swing)
-            base_thrust_ratio (float): Base thrust as fraction of weight (default 0.6)
+        Apply stabilized thruster control (Delegates to controllers).
         """
-        if len(self.thruster_indices) == 0:
-            return
-
-        # 1. Get Orientation State
-        quat = self.data.qpos[3:7]  # [w, x, y, z]
-        
-        # Roll (x-axis rotation)
-        sinr_cosp = 2 * (quat[0] * quat[1] + quat[2] * quat[3])
-        cosr_cosp = 1 - 2 * (quat[1] * quat[1] + quat[2] * quat[2])
-        roll = np.arctan2(sinr_cosp, cosr_cosp)
-
-        # Pitch (y-axis rotation)
-        sinp = 2 * (quat[0] * quat[2] - quat[3] * quat[1])
-        if abs(sinp) >= 1:
-            pitch = np.copysign(np.pi / 2, sinp)
-        else:
-            pitch = np.arcsin(sinp)
-
-        # Yaw (z-axis rotation)
-        siny_cosp = 2 * (quat[0] * quat[3] + quat[1] * quat[2])
-        cosy_cosp = 1 - 2 * (quat[2] * quat[2] + quat[3] * quat[3])
-        yaw = np.arctan2(siny_cosp, cosy_cosp)
-        
-        # Angular velocities
-        w_x = self.data.qvel[3]
-        w_y = self.data.qvel[4]
-        w_z = self.data.qvel[5]
-
-        # 2. PID Gains (Tuned for 32kg robot)
-        kp_roll = 100.0
-        kd_roll = 10.0
-        
-        kp_pitch = 100.0
-        kd_pitch = 10.0
-        
-        kp_yaw = 100.0
-        kd_yaw = 10.0
-
-        # 3. Compute Control Efforts
-        # Targets are 0.0 (stabilize to flat)
-        t_roll = (kp_roll * (0.0 - roll)) - (kd_roll * w_x)
-        t_pitch = (kp_pitch * (0.0 - pitch)) - (kd_pitch * w_y)
-        t_yaw = (kp_yaw * (0.0 - yaw)) - (kd_yaw * w_z) # Yaw target 0 might be bad if turning? 
-        # For now, stabilize Yaw to 0 (straight line walking). 
-        # Ideally, target yaw should come from planner.
-        
-        # 4. Compute Base Thrust
-        robot_weight = self.params.robot_mass * 9.81
-        
-        # Adaptive boost for swing legs
-        num_swing = np.sum(contact_states == 0)
-        swing_boost = 0.05 * num_swing # +5% per swing leg
-        
-        total_base_thrust = robot_weight * (base_thrust_ratio + swing_boost)
-        base = total_base_thrust / 4.0
-
-        # 5. Mixing Logic
-        # FL (Front Left): +T_roll - T_pitch + T_yaw
-        # FR (Front Right): -T_roll - T_pitch - T_yaw
-        # HL (Rear Left): +T_roll + T_pitch - T_yaw
-        # HR (Rear Right): -T_roll + T_pitch + T_yaw
-        
-        f_fl = base + t_roll - t_pitch + t_yaw
-        f_fr = base - t_roll - t_pitch - t_yaw
-        f_hl = base + t_roll + t_pitch - t_yaw
-        f_hr = base - t_roll + t_pitch + t_yaw
-        
-        forces = [f_fl, f_fr, f_hl, f_hr]
-        
-        # 6. Apply
-        for i, idx in enumerate(self.thruster_indices):
-            force = np.clip(forces[i], 0, 500)
-            self.data.ctrl[idx] = force
+        controllers.apply_stabilized_thruster_control(self, contact_states, base_thrust_ratio)
 
     def apply_trot_thruster_control(self, contact_states: np.ndarray, 
                                     base_thrust_ratio: float = 0.5):
         """
-        Apply trot-specific thruster control with targeted support for swinging legs.
-        
-        Optimized for trot gait where diagonal pairs alternate. Provides extra thrust
-        on thrusters corresponding to legs in the air to prevent tipping during
-        the flight phase.
-        
-        Args:
-            contact_states (np.ndarray): Contact flags [4] (1=stance, 0=swing)
-                                         Order: [FL, FR, HL, HR]
-            base_thrust_ratio (float): Base thrust as fraction of weight (default 0.5)
-        
-        Trot Gait Pattern:
-            Phase 1: FL+HR stance, FR+HL swing → Boost FR+HL thrusters
-            Phase 2: FR+HL stance, FL+HR swing → Boost FL+HR thrusters
-        
-        Control Strategy:
-            1. Base thrust: 50% of weight (higher than walk for dynamic stability)
-            2. Swing leg boost: +15% extra on thrusters under swinging legs
-            3. PID orientation control: Same as walk mode
-        
-        Example:
-            FR+HL swinging (contact_states = [1, 0, 0, 1]):
-            - FL thruster: 50% base (stance leg)
-            - FR thruster: 50% + 15% = 65% (swing leg - BOOSTED)
-            - HL thruster: 50% + 15% = 65% (swing leg - BOOSTED)
-            - HR thruster: 50% base (stance leg)
+        Apply trot-specific thruster control (Delegates to controllers).
         """
-        if len(self.thruster_indices) == 0:
-            return
+        controllers.apply_trot_thruster_control(self, contact_states, base_thrust_ratio)
 
-        # 1. Get Orientation State (same as walk mode)
-        quat = self.data.qpos[3:7]  # [w, x, y, z]
-        
-        # Roll (x-axis rotation)
-        sinr_cosp = 2 * (quat[0] * quat[1] + quat[2] * quat[3])
-        cosr_cosp = 1 - 2 * (quat[1] * quat[1] + quat[2] * quat[2])
-        roll = np.arctan2(sinr_cosp, cosr_cosp)
 
-        # Pitch (y-axis rotation)
-        sinp = 2 * (quat[0] * quat[2] - quat[3] * quat[1])
-        if abs(sinp) >= 1:
-            pitch = np.copysign(np.pi / 2, sinp)
-        else:
-            pitch = np.arcsin(sinp)
-
-        # Yaw (z-axis rotation)
-        siny_cosp = 2 * (quat[0] * quat[3] + quat[1] * quat[2])
-        cosy_cosp = 1 - 2 * (quat[2] * quat[2] + quat[3] * quat[3])
-        yaw = np.arctan2(siny_cosp, cosy_cosp)
-        
-        # Angular velocities
-        w_x = self.data.qvel[3]
-        w_y = self.data.qvel[4]
-        w_z = self.data.qvel[5]
-        
-        # Vertical velocity (for damping)
-        v_z = self.data.qvel[2]
-
-        # 2. PID Gains (TROT-SPECIFIC: Stronger damping + Integral for roll)
-        kp_roll = 600.0  # Increased for faster roll correction
-        ki_roll = 100.0  # NEW: Integral to eliminate steady-state roll bias
-        kd_roll = 50.0   # Higher damping for trot (vs 30 for walk)
-        
-        kp_pitch = 400.0
-        kd_pitch = 50.0  # Higher damping for trot
-        
-        kp_yaw = 400.0
-        kd_yaw = 30.0
-        
-        # Roll integral accumulator (with anti-windup)
-        if not hasattr(self, '_roll_integral'):
-            self._roll_integral = 0.0
-        
-        dt = self.model.opt.timestep
-        self._roll_integral += (0.0 - roll) * dt
-        # Anti-windup: limit integral to prevent overshooting
-        self._roll_integral = np.clip(self._roll_integral, -0.2, 0.2)
-
-        # 3. Compute Control Efforts (PID for roll, PD for pitch/yaw)
-        t_roll = (kp_roll * (0.0 - roll)) + (ki_roll * self._roll_integral) - (kd_roll * w_x)
-        t_pitch = (kp_pitch * (0.0 - pitch)) - (kd_pitch * w_y)
-        t_yaw = (kp_yaw * (0.0 - yaw)) - (kd_yaw * w_z)
-        
-        # 4. Compute Base Thrust (TROT-SPECIFIC)
-        robot_weight = self.params.robot_mass * 9.81
-        
-        # Higher base thrust for trot (50% vs 40% for walk)
-        total_base_thrust = robot_weight * base_thrust_ratio
-        
-        # VERTICAL VELOCITY DAMPING: Reduce thrust if rising too fast
-        # This prevents bouncing and maintains ground contact
-        kd_vertical = 20.0  # Vertical damping coefficient
-        vertical_damping = -kd_vertical * v_z  # Negative feedback on upward velocity
-        
-        # Distribute base thrust + vertical damping
-        base = (total_base_thrust + vertical_damping) / 4.0
-        
-        # 5. TROT-SPECIFIC: Targeted boost for swinging legs
-        # Add extra thrust on thrusters corresponding to legs in the air
-        swing_boost_per_leg = robot_weight * 0.15  # 15% extra per swing leg
-        
-        # Create per-thruster boost array
-        # Thruster order: [FL, FR, HL, HR]
-        leg_boost = np.zeros(4)
-        for i in range(4):
-            if contact_states[i] == 0:  # Leg is swinging
-                leg_boost[i] = swing_boost_per_leg / 4.0  # Distribute to this thruster
-
-        # 6. Mixing Logic (same as walk, but with per-leg boost)
-        f_fl = base + leg_boost[0] + t_roll - t_pitch + t_yaw
-        f_fr = base + leg_boost[1] - t_roll - t_pitch - t_yaw
-        f_hl = base + leg_boost[2] + t_roll + t_pitch - t_yaw
-        f_hr = base + leg_boost[3] - t_roll + t_pitch + t_yaw
-        
-        forces = [f_fl, f_fr, f_hl, f_hr]
-        
-        # 7. Apply
-        for i, idx in enumerate(self.thruster_indices):
-            force = np.clip(forces[i], 0, 500)
-            self.data.ctrl[idx] = force
 
     def step_physics(self):
         """

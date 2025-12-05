@@ -279,10 +279,11 @@ def main():
     # ==========================================
     
     USE_GUI = True
-    SIMULATION_TIME = 30.0
+    SIMULATION_TIME = 10.0
     IN_VERIFICATION = False
     WHEELS_ON = True
     ENABLE_GAIT_DEBUG = False
+    LOGGING_ENABLED = True
     
     # REDUCED velocity for debugging
     TARGET_VELOCITY = np.array([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])  # [vx, vy, vz, wx, wy, wz]
@@ -343,6 +344,8 @@ def main():
     try:
         sim = RobotSimulation(params, use_gui=USE_GUI, 
                              verify=IN_VERIFICATION, wheels=WHEELS_ON)
+        if LOGGING_ENABLED:
+            sim.init_logging()  # Initialize logging
         print(f"  ✓ Robot loaded successfully")
         print(f"  ✓ Number of joints: {len(sim.joint_indices)}")
     except Exception as e:
@@ -421,11 +424,16 @@ def main():
     cost_history = []
     
     current_contact_states = np.ones(4)
-    controller.gait_gen.set_gait_mode('hybrid_walk')
+    
+    # Set gait mode
+    GAIT_MODE = 'hybrid_walk'  # Change to 'hybrid_trot' or 'trot' as needed
+    controller.gait_gen.set_gait_mode(GAIT_MODE)
 
     try:
         for step in range(num_steps):
             t = step * dt_control
+            
+
             
             # Get current state
             x_current = sim.get_state()
@@ -506,15 +514,16 @@ def main():
                         # TROT-SPECIFIC: Targeted boost for swinging legs
                         sim.apply_trot_thruster_control(
                             contact_states=current_contact_states,
-                            base_thrust_ratio=0.5
+                            base_thrust_ratio=0.4
                         )
                     else:
                         # WALK MODE: Uniform adaptive thrust
                         sim.apply_stabilized_thruster_control(
                             contact_states=current_contact_states,
-                            base_thrust_ratio=0.6   
+                            base_thrust_ratio=0.4   
                         )
                 sim.step_physics()
+                sim.log_state()  # Log data every physics step
             sim.render()
 
             # Print status
@@ -547,6 +556,11 @@ def main():
             print(f"  Distance traveled: "
                   f"{np.linalg.norm(state_history[-1][3:5] - state_history[0][3:5]):.2f} m")
         
+        # Generate descriptive filename
+        mode_str = "wheels" if WHEELS_ON else "feet"
+        log_filename = f"logs_{mode_str}_{GAIT_MODE}.csv"
+        
+        sim.save_logs(log_filename)  # Save logs to descriptive CSV
         sim.close()
         print("\n✓ Simulation closed")
         print("="*60)
