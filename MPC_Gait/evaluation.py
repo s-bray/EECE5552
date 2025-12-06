@@ -1,3 +1,19 @@
+"""
+Evaluation & Plotting Script
+============================
+
+This script processes simulation logs and generates comparison plots.
+It automatically detects log files in the `csv/` directory and overlays them
+to allow direct comparison between different runs (e.g., Wheels vs Feet).
+
+Features:
+-   Plots Control Effort, Leg Torques, Thruster Forces, Pitch, and Height.
+-   Generates separate torque plots for each leg.
+-   Normalizes time axis to start at t=0.
+
+Usage:
+    python3 evaluation.py
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 import os

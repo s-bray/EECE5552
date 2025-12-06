@@ -279,11 +279,11 @@ def main():
     # ==========================================
     
     USE_GUI = True
-    SIMULATION_TIME = 10.0
+    SIMULATION_TIME = 20.0
     IN_VERIFICATION = False
     WHEELS_ON = True
     ENABLE_GAIT_DEBUG = False
-    LOGGING_ENABLED = True
+    LOGGING_ENABLED = False
     
     # REDUCED velocity for debugging
     TARGET_VELOCITY = np.array([0.2, 0.0, 0.0, 0.0, 0.0, 0.0])  # [vx, vy, vz, wx, wy, wz]
@@ -426,14 +426,12 @@ def main():
     current_contact_states = np.ones(4)
     
     # Set gait mode
-    GAIT_MODE = 'hybrid_walk'  # Change to 'hybrid_trot' or 'trot' as needed
+    GAIT_MODE = 'hybrid_trot'  # Change to 'hybrid_trot' or 'trot' as needed
     controller.gait_gen.set_gait_mode(GAIT_MODE)
 
     try:
         for step in range(num_steps):
             t = step * dt_control
-            
-
             
             # Get current state
             x_current = sim.get_state()
@@ -507,21 +505,11 @@ def main():
                 sim.apply_control_new(u_apply, current_contact_states)
                 # Apply adaptive thrusters if in wheeled mode
                 if WHEELS_ON:
-                    # Get current gait mode
-                    current_gait_mode = controller.gait_gen.gait_mode
-                    
-                    if current_gait_mode == 'hybrid_trot':
-                        # TROT-SPECIFIC: Targeted boost for swinging legs
-                        sim.apply_trot_thruster_control(
-                            contact_states=current_contact_states,
-                            base_thrust_ratio=0.4
-                        )
-                    else:
-                        # WALK MODE: Uniform adaptive thrust
-                        sim.apply_stabilized_thruster_control(
-                            contact_states=current_contact_states,
-                            base_thrust_ratio=0.4   
-                        )
+                    sim.apply_stabilized_thruster_control(
+                        contact_states=current_contact_states,
+                        base_thrust_ratio=0.4
+                    )
+
                 sim.step_physics()
                 sim.log_state()  # Log data every physics step
             sim.render()

@@ -184,13 +184,16 @@ class RobotSimulation:
         
         for act_idx in range(self.model.nu):
             try:
-                # Get the joint this actuator controls
-                joint_id = int(self.model.actuator_trnid[act_idx][0])
-                self.joint_to_actuator[joint_id] = act_idx
+                # Check if this is a joint actuator
+                if self.model.actuator_trntype[act_idx] == mujoco.mjtTrn.mjTRN_JOINT:
+                    # Get the joint this actuator controls
+                    joint_id = int(self.model.actuator_trnid[act_idx][0])
+                    self.joint_to_actuator[joint_id] = act_idx
             except Exception as e:
                 print(f"  ⚠️ Warning: Could not map actuator {act_idx}: {e}")
         
         print(f"  ℹ Built actuator mapping for {len(self.joint_to_actuator)} actuators")
+        print(f"  Mapping: {self.joint_to_actuator}")
     
     def set_initial_configuration(self):
         """
@@ -415,13 +418,6 @@ class RobotSimulation:
         ])
 
         return x
-
-    def apply_control(self, u: np.ndarray, contact_states: np.ndarray = None):
-        """
-        Apply PD control + Feedforward contact forces (Legacy method).
-        Delegates to controllers.apply_control.
-        """
-        controllers.apply_control(self, u, contact_states)
     
     def _detect_contacts(self) -> np.ndarray:
         """
@@ -511,15 +507,6 @@ class RobotSimulation:
         Apply stabilized thruster control (Delegates to controllers).
         """
         controllers.apply_stabilized_thruster_control(self, contact_states, base_thrust_ratio)
-
-    def apply_trot_thruster_control(self, contact_states: np.ndarray, 
-                                    base_thrust_ratio: float = 0.5):
-        """
-        Apply trot-specific thruster control (Delegates to controllers).
-        """
-        controllers.apply_trot_thruster_control(self, contact_states, base_thrust_ratio)
-
-
 
     def step_physics(self):
         """
