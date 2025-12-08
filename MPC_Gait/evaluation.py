@@ -82,7 +82,9 @@ def plot_evaluation():
     fig_orient, ax_orient = plt.subplots(figsize=(10, 6))
     fig_pos, ax_pos = plt.subplots(figsize=(10, 6))
     
-    colors = plt.cm.tab10(np.linspace(0, 1, len(filenames)))
+    # Use high-contrast colors for comparison
+    # colors = plt.cm.tab10(np.linspace(0, 1, len(filenames)))
+    colors = ['r', 'b', 'g', 'k', 'm', 'c', 'y']
     
     has_thruster_data = False
     
